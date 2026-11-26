@@ -24,6 +24,12 @@ function sha256File(filePath) {
 
 function verifyAuthenticode(dllPath) {
   const escaped = dllPath.replace(/'/g, "''");
+  const cleanEnv = { ...process.env };
+  for (const key of Object.keys(cleanEnv)) {
+    if (key.toLowerCase() === 'psmodulepath') {
+      delete cleanEnv[key];
+    }
+  }
   const out = execFileSync(
     'powershell.exe',
     [
@@ -32,7 +38,7 @@ function verifyAuthenticode(dllPath) {
       '-Command',
       `$sig = Get-AuthenticodeSignature -LiteralPath '${escaped}'; if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'WireGuard LLC') { throw ('Invalid Wintun signature: ' + $sig.Status + ' ' + $sig.SignerCertificate.Subject) }; Write-Output ($sig.Status.ToString() + '|' + $sig.SignerCertificate.Subject)`,
     ],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', env: cleanEnv },
   ).trim();
   console.log(`Verified Wintun Authenticode signature: ${out}`);
 }
