@@ -975,10 +975,7 @@ fn is_mux_compatible_outbound(profile: &ServerProfile, ob: &Value) -> bool {
             return false;
         }
     }
-    if ob.get("mux").is_some() {
-        return false;
-    }
-    true
+    ob.get("mux").is_none()
 }
 
 fn apply_advanced_outbound_options(

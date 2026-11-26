@@ -85,7 +85,9 @@ fs.writeFileSync(tarPath, buf);
 const extractDir = path.join(tmpDir, 'extracted');
 fs.mkdirSync(extractDir, { recursive: true });
 
-execFileSync('tar.exe', ['-xzf', tarPath, '-C', extractDir], { stdio: 'inherit' });
+const systemTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+const tarCmd = fs.existsSync(systemTar) ? systemTar : 'tar.exe';
+execFileSync(tarCmd, ['-xzf', tarPath, '-C', extractDir], { stdio: 'inherit' });
 
 // Locate wireproxy.exe inside extracted directory (root or nested folder)
 function findFile(dir, targetName) {

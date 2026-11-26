@@ -489,13 +489,9 @@ fn is_valid_domain_token_for_cat(category_id: &str, raw: &str) -> bool {
             return false;
         }
     }
-    if FORBIDDEN_GLOBAL_CDNS
+    !FORBIDDEN_GLOBAL_CDNS
         .iter()
         .any(|cdn| t == *cdn || t.ends_with(&format!(".{cdn}")))
-    {
-        return false;
-    }
-    true
 }
 
 pub fn validate_rulepack_data(pack: &RulepackData) -> Result<(), String> {

@@ -68,7 +68,9 @@ fs.writeFileSync(zipPath, buf);
 const extractDir = path.join(tmpDir, 'extracted');
 fs.mkdirSync(extractDir, { recursive: true });
 
-execFileSync('tar.exe', ['-xf', zipPath, '-C', extractDir], { stdio: 'inherit' });
+const systemTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+const tarCmd = fs.existsSync(systemTar) ? systemTar : 'tar.exe';
+execFileSync(tarCmd, ['-xf', zipPath, '-C', extractDir], { stdio: 'inherit' });
 
 const extractedExe = path.join(extractDir, 'xray.exe');
 const extractedLic = path.join(extractDir, 'LICENSE');
