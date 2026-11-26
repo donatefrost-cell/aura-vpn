@@ -70,10 +70,8 @@ jobs:
         run: npm run download-core
 
       - name: Frontend checks (Vitest, TypeScript, Vite build)
-        run: |
-          npm run test
-          npx tsc --noEmit
-          npm run build
+        shell: bash
+        run: npm run test && npx tsc --noEmit && npm run build
 
       - name: Verify no preview mock chunk leaked into production dist
         shell: pwsh

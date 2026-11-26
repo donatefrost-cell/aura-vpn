@@ -68,16 +68,7 @@ fs.writeFileSync(zipPath, buf);
 const extractDir = path.join(tmpDir, 'extracted');
 fs.mkdirSync(extractDir, { recursive: true });
 
-execFileSync(
-  'powershell.exe',
-  [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    `Expand-Archive -LiteralPath '${zipPath.replace(/'/g, "''")}' -DestinationPath '${extractDir.replace(/'/g, "''")}' -Force`,
-  ],
-  { stdio: 'inherit' },
-);
+execFileSync('tar.exe', ['-xf', zipPath, '-C', extractDir], { stdio: 'inherit' });
 
 const extractedExe = path.join(extractDir, 'xray.exe');
 const extractedLic = path.join(extractDir, 'LICENSE');
