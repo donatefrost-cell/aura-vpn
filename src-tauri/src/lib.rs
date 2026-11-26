@@ -337,6 +337,7 @@ pub fn run() {
             commands::update_settings,
             commands::get_elevation_status,
             commands::relaunch_as_admin,
+            commands::set_always_admin,
             commands::check_for_updates,
             commands::get_logs,
             commands::clear_logs,

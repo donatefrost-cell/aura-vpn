@@ -339,6 +339,11 @@ export const api = {
     return invoke<void>('relaunch_as_admin');
   },
 
+  async setAlwaysAdmin(enabled: boolean, relaunchNow = false): Promise<CoreDiagnostics> {
+    if (!isTauriRuntime()) return (await loadPreview()).setAlwaysAdmin(enabled, relaunchNow);
+    return invoke<CoreDiagnostics>('set_always_admin', { enabled, relaunchNow });
+  },
+
   async checkForUpdates(): Promise<UpdateCheckResult> {
     if (!isTauriRuntime()) return (await loadPreview()).checkForUpdates();
     return invoke<UpdateCheckResult>('check_for_updates');

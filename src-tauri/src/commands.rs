@@ -2499,6 +2499,42 @@ pub fn relaunch_as_admin(app: AppHandle, state: State<'_, AppState>) -> Result<(
 }
 
 #[tauri::command]
+pub async fn set_always_admin(
+    enabled: bool,
+    relaunch_now: bool,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<CoreDiagnostics, String> {
+    crate::elevation::set_always_admin(enabled)?;
+    let (autostart, start_minimized) = {
+        let guard = state.settings.lock().unwrap_or_else(|p| p.into_inner());
+        (guard.autostart, guard.start_minimized)
+    };
+    if let Err(err) = sync_autostart(autostart, start_minimized) {
+        state.logger.warn("windows", &err);
+    }
+    state.core.invalidate_diagnostics_cache();
+    let diag = state.core.diagnostics();
+    state.logger.info(
+        "windows",
+        if enabled {
+            "Постоянный запуск от имени администратора (RUNASADMIN) включён"
+        } else {
+            "Постоянный запуск от имени администратора (RUNASADMIN) отключён"
+        },
+    );
+    let boot = state.build_bootstrap();
+    let _ = app.emit("bootstrap-sync", &boot);
+    state.tray.update_from_state(&app);
+    if relaunch_now && enabled && !is_elevated() {
+        os_relaunch_as_admin()?;
+        state.core.blocking_cleanup_on_exit();
+        app.exit(0);
+    }
+    Ok(diag)
+}
+
+#[tauri::command]
 pub async fn check_for_updates(state: State<'_, AppState>) -> Result<UpdateCheckResult, String> {
     let ks_snap = state.core.kill_switch_snapshot_now().await;
     if ks_snap.blocking_active {

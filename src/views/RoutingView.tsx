@@ -36,6 +36,9 @@ import {
 import { api } from '../services/api';
 import type {
   AppSettings,
+  ClaudeGuardConfig,
+  ConnectionSnapshot,
+  CoreDiagnostics,
   DnsRouteCheckResult,
   RouteTestResult,
   RoutingConfig,
@@ -52,9 +55,12 @@ type RoutingUiMode = 'simple' | 'advanced';
 
 interface RoutingViewProps {
   settings: AppSettings;
+  connection?: ConnectionSnapshot;
+  diagnostics?: CoreDiagnostics;
   rulepackStatus: RulepackStatus | null;
   onUpdateRouting: (next: RoutingConfig) => void;
   onSwitchToTun: () => void;
+  onSetAlwaysAdmin?: (enabled: boolean, relaunchNow: boolean) => Promise<void>;
   onUpdateRulepack: (url?: string | null) => Promise<void>;
   onRollbackRulepack: () => Promise<void>;
   onNotify: (tone: 'success' | 'error' | 'info', title: string, description?: string) => void;
@@ -95,6 +101,7 @@ const PROFILE_CARDS: Array<{
 ];
 
 const SUGGESTED_APPS = [
+  { exe: 'claude.exe', label: 'Claude' },
   { exe: 'steam.exe', label: 'Steam' },
   { exe: 'discord.exe', label: 'Discord' },
   { exe: 'telegram.exe', label: 'Telegram' },
@@ -110,20 +117,57 @@ function toCategoryKey(id: string): keyof RuCategoriesConfig {
 
 export function RoutingView({
   settings,
+  connection,
+  diagnostics,
   rulepackStatus,
   onUpdateRouting,
   onSwitchToTun,
+  onSetAlwaysAdmin,
   onUpdateRulepack,
   onRollbackRulepack,
   onNotify,
 }: RoutingViewProps) {
   const { routing } = settings;
 
+  const claudeGuard: ClaudeGuardConfig = routing.claudeGuard ?? {
+    enabled: false,
+    blockWithoutVpn: true,
+    extraApps: [],
+  };
+  const claudeStatus = connection?.claudeGuard;
+
   const [uiMode, setUiMode] = useState<RoutingUiMode>('simple');
   const [ruExpanded, setRuExpanded] = useState(true);
 
   // Split Tunneling input
   const [appInput, setAppInput] = useState('');
+  const [claudeExtraInput, setClaudeExtraInput] = useState('');
+  const [savingAdmin, setSavingAdmin] = useState(false);
+
+  const updateClaudeGuard = (patch: Partial<ClaudeGuardConfig>) => {
+    onUpdateRouting({
+      ...routing,
+      claudeGuard: {
+        ...claudeGuard,
+        ...patch,
+      },
+    });
+  };
+
+  const handleAddClaudeExtraApp = () => {
+    const candidate = claudeExtraInput.trim().toLowerCase();
+    if (!candidate) return;
+    if (claudeGuard.extraApps.some((a) => a.toLowerCase() === candidate)) {
+      setClaudeExtraInput('');
+      return;
+    }
+    updateClaudeGuard({ extraApps: [...claudeGuard.extraApps, candidate] });
+    setClaudeExtraInput('');
+  };
+
+  const handleRemoveClaudeExtraApp = (app: string) => {
+    updateClaudeGuard({ extraApps: claudeGuard.extraApps.filter((a) => a !== app) });
+  };
 
   // Custom rules form & search
   const [ruleSearch, setRuleSearch] = useState('');
@@ -763,6 +807,194 @@ export function RoutingView({
               )}
             </M3SurfaceCard>
           </div>
+
+          {/* Dedicated Claude & Anthropic Always-VPN + Anti-RU-Leak Card */}
+          <M3SurfaceCard level="default" className="p-3.5">
+            <div className="space-y-2.5" data-testid="claude-guard-card">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {claudeStatus?.wfpBlockingActive ? (
+                  <ShieldAlert className="h-4 w-4 text-[var(--md-warning)]" />
+                ) : (
+                  <ShieldCheck className="h-4 w-4 text-[var(--md-primary)]" />
+                )}
+                <div>
+                  <h3 className="text-[0.8125rem] font-bold text-[var(--md-on-surface)]">
+                    Защита Claude и Anthropic (Always-VPN + Anti-RU-Leak)
+                  </h3>
+                  <p className="text-[0.7rem] text-[var(--md-on-surface-variant)]">
+                    Принудительно направляет Claude Desktop, Claude Code CLI и домены Anthropic только через VPN и блокирует утечки РФ-трафика при обрыве туннеля
+                  </p>
+                </div>
+              </div>
+              <M3StatusBadge
+                tone={
+                  !claudeGuard.enabled
+                    ? 'neutral'
+                    : claudeStatus?.wfpBlockingActive
+                      ? 'warning'
+                      : claudeStatus?.needsElevation || (claudeGuard.blockWithoutVpn && diagnostics && !diagnostics.isElevated)
+                        ? 'error'
+                        : 'success'
+                }
+              >
+                {!claudeGuard.enabled
+                  ? 'Выключена'
+                  : claudeStatus?.wfpBlockingActive
+                    ? 'WFP-блок активен (без VPN)'
+                    : claudeStatus?.needsElevation || (claudeGuard.blockWithoutVpn && diagnostics && !diagnostics.isElevated)
+                      ? 'Требуются права админа'
+                      : 'Always-VPN активен'}
+              </M3StatusBadge>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--md-surface-container-low)] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-[0.75rem] font-semibold text-[var(--md-on-surface)]">
+                    Все приложения и домены Claude через VPN
+                  </div>
+                  <div className="text-[0.68rem] text-[var(--md-on-surface-variant)]">
+                    Перекрывает «РФ напрямую» и белый список Split Tunneling
+                  </div>
+                </div>
+                <M3Switch
+                  checked={claudeGuard.enabled}
+                  onChange={(v) => updateClaudeGuard({ enabled: v })}
+                  ariaLabel="Защита Claude через VPN"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--md-surface-container-low)] px-3 py-2">
+                <div className="min-w-0">
+                  <div className="text-[0.75rem] font-semibold text-[var(--md-on-surface)]">
+                    Блокировать Claude без VPN (WFP Anti-RU-Leak)
+                  </div>
+                  <div className="text-[0.68rem] text-[var(--md-on-surface-variant)]">
+                    Закрывает доступ к Claude при отключении или падении туннеля
+                  </div>
+                </div>
+                <M3Switch
+                  checked={claudeGuard.blockWithoutVpn}
+                  disabled={!claudeGuard.enabled}
+                  onChange={(v) => updateClaudeGuard({ blockWithoutVpn: v })}
+                  ariaLabel="Блокировать Claude при падении VPN"
+                />
+              </div>
+            </div>
+
+            {claudeGuard.enabled && settings.connectionMode !== 'tun' && (
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--md-warning)]/40 bg-[var(--md-warning-container)] px-3 py-2 text-[0.72rem] text-[var(--md-on-surface)]">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-[var(--md-warning)]" />
+                  <span>
+                    Для перехвата desktop-приложения Claude и CLI (Node.js) поверх всей системы рекомендуется режим TUN.
+                  </span>
+                </div>
+                <M3Button variant="tonal" size="sm" onClick={onSwitchToTun}>
+                  Включить TUN
+                </M3Button>
+              </div>
+            )}
+
+            {claudeGuard.enabled &&
+              claudeGuard.blockWithoutVpn &&
+              (claudeStatus?.needsElevation || (diagnostics && !diagnostics.isElevated)) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--md-error)]/40 bg-[var(--md-error-container)] px-3 py-2 text-[0.72rem] text-[var(--md-on-surface)]">
+                  <div className="flex items-center gap-2">
+                    <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-[var(--md-error)]" />
+                    <span>
+                      Для блокировки трафика Claude в Windows Filtering Platform (WFP) нужны права администратора.
+                    </span>
+                  </div>
+                  <M3Button
+                    size="sm"
+                    variant="tonal"
+                    loading={savingAdmin}
+                    onClick={() => {
+                      setSavingAdmin(true);
+                      const fn = onSetAlwaysAdmin ?? ((e: boolean, r: boolean) => api.setAlwaysAdmin(e, r).then(() => {}));
+                      void fn(true, true).finally(() => setSavingAdmin(false));
+                    }}
+                  >
+                    Права администратора навсегда
+                  </M3Button>
+                </div>
+              )}
+
+            <div className="rounded-xl bg-[var(--md-surface-container-low)] px-3 py-2 text-[0.7rem] space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[var(--md-on-surface)] font-medium">
+                  {claudeStatus?.detail ??
+                    (claudeGuard.enabled
+                      ? 'Правило Always-VPN и VPN-DNS (1.1.1.1) для доменов Claude активны.'
+                      : 'Включите переключатель выше, чтобы принудительно направлять Claude через VPN.')}
+                </span>
+                {claudeStatus && (
+                  <span className="font-mono text-[0.68rem] text-[var(--md-on-surface-variant)]">
+                    Приложений: {claudeStatus.detectedApps.length} • IP: {claudeStatus.blockedIpCount}
+                  </span>
+                )}
+              </div>
+
+              {claudeStatus && claudeStatus.detectedApps.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {claudeStatus.detectedApps.map((appPath) => (
+                    <span
+                      key={appPath}
+                      title={appPath}
+                      className="max-w-full truncate rounded-md bg-[var(--md-surface-container-highest)] px-2 py-0.5 font-mono text-[0.66rem] text-[var(--md-on-surface-variant)]"
+                    >
+                      {appPath}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <input
+                value={claudeExtraInput}
+                onChange={(e) => setClaudeExtraInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAddClaudeExtraApp();
+                }}
+                placeholder="Доп. процесс Claude / CLI (например, claude-helper.exe)"
+                aria-label="Дополнительный процесс Claude"
+                className="h-8.5 flex-1 rounded-xl border border-[var(--md-outline-variant)] bg-[var(--md-surface-container-highest)] px-2.5 text-[0.75rem] text-[var(--md-on-surface)] focus:border-[var(--md-primary)]"
+              />
+              <M3Button
+                variant="tonal"
+                size="sm"
+                onClick={handleAddClaudeExtraApp}
+                leadingIcon={<Plus className="h-3.5 w-3.5" />}
+              >
+                Добавить
+              </M3Button>
+            </div>
+
+            {claudeGuard.extraApps.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {claudeGuard.extraApps.map((app) => (
+                  <span
+                    key={app}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--md-secondary-container)] px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--md-on-secondary-container)]"
+                  >
+                    {app}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveClaudeExtraApp(app)}
+                      className="opacity-70 hover:opacity-100"
+                      aria-label={`Удалить ${app}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            </div>
+          </M3SurfaceCard>
         </div>
       ) : (
         /* ADVANCED MODE */

@@ -74,6 +74,7 @@ interface HomeViewProps {
   onChangeMode: (mode: ConnectionMode) => void;
   onToggleRuDirect: () => void;
   onToggleKillSwitch: () => void;
+  onToggleClaudeGuard?: () => void;
   onSelectBehaviorProfile: (id: BehaviorProfileId) => void;
   onOpenImport: () => void;
   onPasteClipboard: () => void;
@@ -125,6 +126,7 @@ export function HomeView({
   onChangeMode,
   onToggleRuDirect,
   onToggleKillSwitch,
+  onToggleClaudeGuard,
   onSelectBehaviorProfile,
   onOpenImport,
   onPasteClipboard,
@@ -461,7 +463,7 @@ export function HomeView({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+            <div className="grid grid-cols-2 gap-1.5">
               <M3Chip
                 active={ruDirectActive}
                 onClick={onToggleRuDirect}
@@ -478,6 +480,19 @@ export function HomeView({
                 className="w-full justify-center text-[0.6875rem]"
               >
                 Kill Switch
+              </M3Chip>
+
+              <M3Chip
+                active={Boolean(settings.routing.claudeGuard?.enabled)}
+                onClick={() => (onToggleClaudeGuard ? onToggleClaudeGuard() : onOpenRouting?.())}
+                tooltip={
+                  connection.claudeGuard?.wfpBlockingActive
+                    ? 'WFP-блокировка активна: при отключённом VPN трафик Claude/Anthropic заблокирован от РФ-утечек'
+                    : 'Направлять Claude Desktop, Claude Code CLI и claude.ai только через VPN с блокировкой при разрыве'
+                }
+                className="w-full justify-center text-[0.6875rem]"
+              >
+                {connection.claudeGuard?.wfpBlockingActive ? 'Claude: WFP-блок' : 'Защита Claude'}
               </M3Chip>
 
               <M3Chip

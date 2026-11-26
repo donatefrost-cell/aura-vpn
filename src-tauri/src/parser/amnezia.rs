@@ -88,7 +88,11 @@ pub fn parse_amnezia_json_value(
     let description = str_field(root, "description");
     let dns1 = str_field(root, "dns1");
     let dns2 = str_field(root, "dns2");
-    let default_dns: Vec<String> = [dns1, dns2].into_iter().flatten().collect();
+    let default_dns: Vec<String> = [dns1, dns2]
+        .into_iter()
+        .flatten()
+        .filter(|d| d.trim().parse::<std::net::IpAddr>().is_ok())
+        .collect();
 
     let Some(containers) = root.get("containers").and_then(|c| c.as_array()) else {
         // Might be direct Xray JSON rather than Amnezia container wrapper
@@ -96,6 +100,7 @@ pub fn parse_amnezia_json_value(
     };
 
     let mut profiles = Vec::new();
+    let mut last_validation_err: Option<String> = None;
     for container in containers.iter().take(32) {
         let cname = str_field(container, "container")
             .unwrap_or_default()
@@ -256,26 +261,29 @@ pub fn parse_amnezia_json_value(
                                 extra_params,
                                 keepalive,
                             };
-                            if super::wireguard::validate_awg_details(&details).is_ok() {
-                                profiles.push(ServerProfile {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name,
-                                    protocol: ProtocolType::AmneziaWg,
-                                    address: addr,
-                                    port,
-                                    country_code,
-                                    subscription_id: subscription_id.clone(),
-                                    latency_ms: None,
-                                    details: ProtocolDetails::AmneziaWg(details),
-                                    created_at: Utc::now().to_rfc3339(),
-                                    favorite: false,
-                                    last_used_at: None,
-                                    fingerprint_key: None,
-                                    custom_name: None,
-                                    overrides: None,
-                                    original_source: None,
-                                    config_revision: 0,
-                                });
+                            match super::wireguard::validate_awg_details(&details) {
+                                Ok(()) => {
+                                    profiles.push(ServerProfile {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        name,
+                                        protocol: ProtocolType::AmneziaWg,
+                                        address: addr,
+                                        port,
+                                        country_code,
+                                        subscription_id: subscription_id.clone(),
+                                        latency_ms: None,
+                                        details: ProtocolDetails::AmneziaWg(details),
+                                        created_at: Utc::now().to_rfc3339(),
+                                        favorite: false,
+                                        last_used_at: None,
+                                        fingerprint_key: None,
+                                        custom_name: None,
+                                        overrides: None,
+                                        original_source: None,
+                                        config_revision: 0,
+                                    });
+                                }
+                                Err(e) => last_validation_err = Some(e),
                             }
                         } else {
                             let details = WireguardDetails {
@@ -289,26 +297,29 @@ pub fn parse_amnezia_json_value(
                                 reserved: None,
                                 keepalive,
                             };
-                            if super::wireguard::validate_wg_details(&details).is_ok() {
-                                profiles.push(ServerProfile {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name,
-                                    protocol: ProtocolType::Wireguard,
-                                    address: addr,
-                                    port,
-                                    country_code,
-                                    subscription_id: subscription_id.clone(),
-                                    latency_ms: None,
-                                    details: ProtocolDetails::Wireguard(details),
-                                    created_at: Utc::now().to_rfc3339(),
-                                    favorite: false,
-                                    last_used_at: None,
-                                    fingerprint_key: None,
-                                    custom_name: None,
-                                    overrides: None,
-                                    original_source: None,
-                                    config_revision: 0,
-                                });
+                            match super::wireguard::validate_wg_details(&details) {
+                                Ok(()) => {
+                                    profiles.push(ServerProfile {
+                                        id: uuid::Uuid::new_v4().to_string(),
+                                        name,
+                                        protocol: ProtocolType::Wireguard,
+                                        address: addr,
+                                        port,
+                                        country_code,
+                                        subscription_id: subscription_id.clone(),
+                                        latency_ms: None,
+                                        details: ProtocolDetails::Wireguard(details),
+                                        created_at: Utc::now().to_rfc3339(),
+                                        favorite: false,
+                                        last_used_at: None,
+                                        fingerprint_key: None,
+                                        custom_name: None,
+                                        overrides: None,
+                                        original_source: None,
+                                        config_revision: 0,
+                                    });
+                                }
+                                Err(e) => last_validation_err = Some(e),
                             }
                         }
                     }
@@ -363,10 +374,10 @@ pub fn parse_amnezia_json_value(
     }
 
     if profiles.is_empty() {
-        return Err(
+        return Err(last_validation_err.unwrap_or_else(|| {
             "Контейнер Amnezia не содержит поддерживаемых конфигов (Xray / AmneziaWG / WireGuard / Shadowsocks)"
-                .to_string(),
-        );
+                .to_string()
+        }));
     }
     Ok(profiles)
 }

@@ -1144,6 +1144,497 @@ impl KillSwitchState {
     }
 }
 
+const AURA_CLAUDE_WFP_SUBLAYER_GUID: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0xa94a_5610_7f3c_4b92_91d2_44e9_0700_0002);
+
+struct ClaudeWfpSession {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+unsafe impl Send for ClaudeWfpSession {}
+unsafe impl Sync for ClaudeWfpSession {}
+
+impl Drop for ClaudeWfpSession {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.handle.is_null() {
+                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmEngineClose0(
+                    self.handle,
+                );
+                self.handle = std::ptr::null_mut();
+            }
+        }
+    }
+}
+
+impl ClaudeWfpSession {
+    fn open_and_arm(
+        app_exes: &[PathBuf],
+        ips: &[std::net::IpAddr],
+    ) -> Result<Self, (bool, String)> {
+        use windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED;
+        use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
+            FwpmEngineOpen0, FwpmFilterAdd0, FwpmFreeMemory0, FwpmGetAppIdFromFileName0,
+            FwpmSubLayerAdd0, FWPM_ACTION0, FWPM_CONDITION_ALE_APP_ID,
+            FWPM_CONDITION_IP_REMOTE_ADDRESS, FWPM_DISPLAY_DATA0, FWPM_FILTER0,
+            FWPM_FILTER_CONDITION0, FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_ACTION_BLOCK,
+            FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE, FWP_CONDITION_VALUE0, FWP_MATCH_EQUAL, FWP_UINT64,
+            FWP_V4_ADDR_AND_MASK, FWP_V4_ADDR_MASK, FWP_V6_ADDR_AND_MASK, FWP_V6_ADDR_MASK,
+            FWP_VALUE0,
+        };
+        const RPC_C_AUTHN_DEFAULT: u32 = 0xFFFF_FFFF;
+
+        let mut session_name = to_wide_null("AURA VPN Claude Guard");
+        let mut session: FWPM_SESSION0 = unsafe { std::mem::zeroed() };
+        session.displayData.name = session_name.as_mut_ptr();
+        session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+
+        let mut engine: windows_sys::Win32::Foundation::HANDLE = std::ptr::null_mut();
+        let rc = unsafe {
+            FwpmEngineOpen0(
+                std::ptr::null(),
+                RPC_C_AUTHN_DEFAULT,
+                std::ptr::null(),
+                &session,
+                &mut engine,
+            )
+        };
+        if rc != 0 {
+            let needs_uac = rc == ERROR_ACCESS_DENIED;
+            return Err((
+                needs_uac,
+                if needs_uac {
+                    "Требуются права администратора (UAC), чтобы блокировать Claude при отключённом VPN.".to_string()
+                } else {
+                    format!("Не удалось открыть WFP для Claude Guard (код {rc:#x}).")
+                },
+            ));
+        }
+
+        let guard = Self { handle: engine };
+
+        let mut sublayer_name = to_wide_null("AURA VPN Claude Anti-RU-Leak Sublayer");
+        let mut sublayer: FWPM_SUBLAYER0 = unsafe { std::mem::zeroed() };
+        sublayer.subLayerKey = AURA_CLAUDE_WFP_SUBLAYER_GUID;
+        sublayer.displayData = FWPM_DISPLAY_DATA0 {
+            name: sublayer_name.as_mut_ptr(),
+            description: sublayer_name.as_mut_ptr(),
+        };
+        sublayer.weight = 0x7FFE;
+
+        let sub_rc = unsafe { FwpmSubLayerAdd0(guard.handle, &sublayer, std::ptr::null_mut()) };
+        if sub_rc != 0 && sub_rc != 0x8032_0009 {
+            let needs_uac = sub_rc == ERROR_ACCESS_DENIED;
+            return Err((
+                needs_uac,
+                if needs_uac {
+                    "Нет прав для добавления sublayer Claude Guard в WFP (требуется UAC)."
+                        .to_string()
+                } else {
+                    format!("Ошибка sublayer WFP Claude Guard (код {sub_rc:#x}).")
+                },
+            ));
+        }
+
+        let mut added_rules = 0usize;
+        let mut weight_val: u64 = 100;
+
+        for exe in app_exes {
+            if !exe.is_file() {
+                continue;
+            }
+            let wpath = to_wide_null(&exe.to_string_lossy());
+            let mut app_blob: *mut FWP_BYTE_BLOB = std::ptr::null_mut();
+            let app_rc = unsafe { FwpmGetAppIdFromFileName0(wpath.as_ptr(), &mut app_blob) };
+            if app_rc != 0 || app_blob.is_null() {
+                continue;
+            }
+
+            let mut cond: FWPM_FILTER_CONDITION0 = unsafe { std::mem::zeroed() };
+            cond.fieldKey = FWPM_CONDITION_ALE_APP_ID;
+            cond.matchType = FWP_MATCH_EQUAL;
+            cond.conditionValue = FWP_CONDITION_VALUE0 {
+                r#type: FWP_BYTE_BLOB_TYPE,
+                Anonymous: unsafe {
+                    let mut u = std::mem::zeroed::<
+                        windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0,
+                    >();
+                    u.byteBlob = app_blob;
+                    u
+                },
+            };
+
+            let mut wtitle = to_wide_null("AURA Claude Guard App Block");
+            for layer_key in [
+                FWPM_LAYER_ALE_AUTH_CONNECT_V4,
+                FWPM_LAYER_ALE_AUTH_CONNECT_V6,
+            ] {
+                let mut filter: FWPM_FILTER0 = unsafe { std::mem::zeroed() };
+                filter.displayData.name = wtitle.as_mut_ptr();
+                filter.layerKey = layer_key;
+                filter.subLayerKey = AURA_CLAUDE_WFP_SUBLAYER_GUID;
+                filter.weight = FWP_VALUE0 {
+                    r#type: FWP_UINT64,
+                    Anonymous: unsafe {
+                        let mut w = std::mem::zeroed::<
+                            windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0_0,
+                        >();
+                        w.uint64 = &mut weight_val;
+                        w
+                    },
+                };
+                filter.numFilterConditions = 1;
+                filter.filterCondition = &mut cond;
+                filter.action = FWPM_ACTION0 {
+                    r#type: FWP_ACTION_BLOCK,
+                    Anonymous: unsafe { std::mem::zeroed() },
+                };
+
+                let mut fid = 0u64;
+                if unsafe { FwpmFilterAdd0(guard.handle, &filter, std::ptr::null_mut(), &mut fid) }
+                    == 0
+                {
+                    added_rules += 1;
+                }
+            }
+
+            unsafe {
+                FwpmFreeMemory0((&mut app_blob as *mut *mut FWP_BYTE_BLOB).cast());
+            }
+        }
+
+        let mut wtitle_ip = to_wide_null("AURA Claude Guard Remote IP Block");
+        for ip in ips {
+            match ip {
+                std::net::IpAddr::V4(v4) => {
+                    if v4.is_loopback() || v4.is_unspecified() {
+                        continue;
+                    }
+                    let mut addr_mask = FWP_V4_ADDR_AND_MASK {
+                        addr: u32::from_be_bytes(v4.octets()),
+                        mask: 0xFFFF_FFFF,
+                    };
+                    let mut cond: FWPM_FILTER_CONDITION0 = unsafe { std::mem::zeroed() };
+                    cond.fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+                    cond.matchType = FWP_MATCH_EQUAL;
+                    cond.conditionValue = FWP_CONDITION_VALUE0 {
+                        r#type: FWP_V4_ADDR_MASK,
+                        Anonymous: unsafe {
+                            let mut u = std::mem::zeroed::<
+                                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0,
+                            >();
+                            u.v4AddrMask = &mut addr_mask;
+                            u
+                        },
+                    };
+                    let mut filter: FWPM_FILTER0 = unsafe { std::mem::zeroed() };
+                    filter.displayData.name = wtitle_ip.as_mut_ptr();
+                    filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+                    filter.subLayerKey = AURA_CLAUDE_WFP_SUBLAYER_GUID;
+                    filter.weight = FWP_VALUE0 {
+                        r#type: FWP_UINT64,
+                        Anonymous: unsafe {
+                            let mut w = std::mem::zeroed::<
+                                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0_0,
+                            >();
+                            w.uint64 = &mut weight_val;
+                            w
+                        },
+                    };
+                    filter.numFilterConditions = 1;
+                    filter.filterCondition = &mut cond;
+                    filter.action = FWPM_ACTION0 {
+                        r#type: FWP_ACTION_BLOCK,
+                        Anonymous: unsafe { std::mem::zeroed() },
+                    };
+                    let mut fid = 0u64;
+                    if unsafe {
+                        FwpmFilterAdd0(guard.handle, &filter, std::ptr::null_mut(), &mut fid)
+                    } == 0
+                    {
+                        added_rules += 1;
+                    }
+                }
+                std::net::IpAddr::V6(v6) => {
+                    if v6.is_loopback() || v6.is_unspecified() {
+                        continue;
+                    }
+                    let mut addr_mask = FWP_V6_ADDR_AND_MASK {
+                        addr: v6.octets(),
+                        prefixLength: 128,
+                    };
+                    let mut cond: FWPM_FILTER_CONDITION0 = unsafe { std::mem::zeroed() };
+                    cond.fieldKey = FWPM_CONDITION_IP_REMOTE_ADDRESS;
+                    cond.matchType = FWP_MATCH_EQUAL;
+                    cond.conditionValue = FWP_CONDITION_VALUE0 {
+                        r#type: FWP_V6_ADDR_MASK,
+                        Anonymous: unsafe {
+                            let mut u = std::mem::zeroed::<
+                                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0,
+                            >();
+                            u.v6AddrMask = &mut addr_mask;
+                            u
+                        },
+                    };
+                    let mut filter: FWPM_FILTER0 = unsafe { std::mem::zeroed() };
+                    filter.displayData.name = wtitle_ip.as_mut_ptr();
+                    filter.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V6;
+                    filter.subLayerKey = AURA_CLAUDE_WFP_SUBLAYER_GUID;
+                    filter.weight = FWP_VALUE0 {
+                        r#type: FWP_UINT64,
+                        Anonymous: unsafe {
+                            let mut w = std::mem::zeroed::<
+                                windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0_0,
+                            >();
+                            w.uint64 = &mut weight_val;
+                            w
+                        },
+                    };
+                    filter.numFilterConditions = 1;
+                    filter.filterCondition = &mut cond;
+                    filter.action = FWPM_ACTION0 {
+                        r#type: FWP_ACTION_BLOCK,
+                        Anonymous: unsafe { std::mem::zeroed() },
+                    };
+                    let mut fid = 0u64;
+                    if unsafe {
+                        FwpmFilterAdd0(guard.handle, &filter, std::ptr::null_mut(), &mut fid)
+                    } == 0
+                    {
+                        added_rules += 1;
+                    }
+                }
+            }
+        }
+
+        if added_rules == 0 {
+            return Err((
+                false,
+                "WFP для Claude Guard открыт, но пока нет обнаруженных exe или разрешённых IP Claude.".to_string(),
+            ));
+        }
+
+        Ok(guard)
+    }
+}
+
+pub struct ClaudeGuardManager {
+    wfp_session: Option<ClaudeWfpSession>,
+    resolved_ips: Vec<std::net::IpAddr>,
+    last_resolved_at: Option<std::time::Instant>,
+    detected_apps: Vec<PathBuf>,
+    last_detected_at: Option<std::time::Instant>,
+    last_extra_apps: Vec<String>,
+    last_signature: Option<(bool, bool, Vec<PathBuf>, Vec<std::net::IpAddr>)>,
+    last_status: crate::models::ClaudeGuardStatus,
+}
+
+impl Default for ClaudeGuardManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ClaudeGuardManager {
+    pub fn new() -> Self {
+        Self {
+            wfp_session: None,
+            resolved_ips: Vec::new(),
+            last_resolved_at: None,
+            detected_apps: Vec::new(),
+            last_detected_at: None,
+            last_extra_apps: Vec::new(),
+            last_signature: None,
+            last_status: crate::models::ClaudeGuardStatus::default(),
+        }
+    }
+
+    pub fn snapshot(&self) -> crate::models::ClaudeGuardStatus {
+        self.last_status.clone()
+    }
+
+    pub async fn resolve_claude_ips_if_needed(&mut self, enabled: bool, block_without_vpn: bool) {
+        if !enabled || !block_without_vpn {
+            return;
+        }
+        let stale = self
+            .last_resolved_at
+            .map(|t| t.elapsed() > std::time::Duration::from_secs(600))
+            .unwrap_or(true);
+        if !stale && !self.resolved_ips.is_empty() {
+            return;
+        }
+
+        let mut set = tokio::task::JoinSet::new();
+        for &host in crate::routing_rules::CLAUDE_RESOLVE_HOSTS {
+            set.spawn(async move {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(2500),
+                    tokio::net::lookup_host((host, 443)),
+                )
+                .await
+                {
+                    Ok(Ok(addrs)) => addrs.map(|a| a.ip()).collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                }
+            });
+        }
+
+        let mut unique = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        while let Some(res) = set.join_next().await {
+            if let Ok(ips) = res {
+                for ip in ips {
+                    if !ip.is_loopback() && !ip.is_unspecified() && seen.insert(ip) {
+                        unique.push(ip);
+                        if unique.len() >= 128 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if !unique.is_empty() {
+            unique.sort_by_key(|ip| ip.to_string());
+            self.resolved_ips = unique;
+            self.last_resolved_at = Some(std::time::Instant::now());
+        } else if self.last_resolved_at.is_none() {
+            // Avoid tight retry loop when DNS is offline/blocked; try again after 60s
+            self.last_resolved_at = Some(
+                std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(540))
+                    .unwrap_or_else(std::time::Instant::now),
+            );
+        }
+    }
+
+    pub fn sync(
+        &mut self,
+        cfg: &crate::models::ClaudeGuardConfig,
+        vpn_connected: bool,
+    ) -> crate::models::ClaudeGuardStatus {
+        let should_refresh_apps = self.last_extra_apps != cfg.extra_apps
+            || self
+                .last_detected_at
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(120))
+                .unwrap_or(true);
+        if cfg.enabled && should_refresh_apps {
+            self.detected_apps = crate::routing_rules::discover_claude_app_exes(&cfg.extra_apps);
+            self.last_detected_at = Some(std::time::Instant::now());
+            self.last_extra_apps = cfg.extra_apps.clone();
+        }
+
+        let elevated = crate::elevation::is_elevated();
+        let detected_app_strings: Vec<String> = self
+            .detected_apps
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        if !cfg.enabled {
+            self.wfp_session = None;
+            self.last_signature = None;
+            self.last_status = crate::models::ClaudeGuardStatus {
+                enabled: false,
+                block_without_vpn: cfg.block_without_vpn,
+                wfp_blocking_active: false,
+                detected_apps: detected_app_strings,
+                blocked_ip_count: self.resolved_ips.len(),
+                needs_elevation: false,
+                detail: "Защита Claude и Anthropic отключена.".to_string(),
+            };
+            return self.last_status.clone();
+        }
+
+        if vpn_connected {
+            self.wfp_session = None;
+            self.last_signature = Some((true, false, Vec::new(), Vec::new()));
+            let needs_uac = cfg.block_without_vpn && !elevated;
+            self.last_status = crate::models::ClaudeGuardStatus {
+                enabled: true,
+                block_without_vpn: cfg.block_without_vpn,
+                wfp_blocking_active: false,
+                detected_apps: detected_app_strings,
+                blocked_ip_count: self.resolved_ips.len(),
+                needs_elevation: needs_uac,
+                detail: if !cfg.block_without_vpn {
+                    "Трафик Claude идёт через VPN. Блокировка при разрыве отключена.".to_string()
+                } else if needs_uac {
+                    "Трафик Claude идёт через VPN, но для блокировки при падении VPN включите «Права администратора навсегда».".to_string()
+                } else {
+                    "Трафик Claude и Anthropic идёт через VPN (WFP anti-RU-leak наготове)."
+                        .to_string()
+                },
+            };
+            return self.last_status.clone();
+        }
+
+        // VPN is disconnected
+        if !cfg.block_without_vpn {
+            self.wfp_session = None;
+            self.last_signature = Some((false, false, Vec::new(), Vec::new()));
+            self.last_status = crate::models::ClaudeGuardStatus {
+                enabled: true,
+                block_without_vpn: false,
+                wfp_blocking_active: false,
+                detected_apps: detected_app_strings,
+                blocked_ip_count: self.resolved_ips.len(),
+                needs_elevation: false,
+                detail: "VPN отключён. Автоблокировка Claude при отсутствии VPN не включена."
+                    .to_string(),
+            };
+            return self.last_status.clone();
+        }
+
+        let sig = (
+            false,
+            true,
+            self.detected_apps.clone(),
+            self.resolved_ips.clone(),
+        );
+        if self.wfp_session.is_some() && self.last_signature.as_ref() == Some(&sig) {
+            return self.last_status.clone();
+        }
+
+        // Drop old dynamic sublayer first, then arm with latest discovered apps & resolved IPs
+        self.wfp_session = None;
+        match ClaudeWfpSession::open_and_arm(&self.detected_apps, &self.resolved_ips) {
+            Ok(session) => {
+                self.wfp_session = Some(session);
+                self.last_signature = Some(sig);
+                self.last_status = crate::models::ClaudeGuardStatus {
+                    enabled: true,
+                    block_without_vpn: true,
+                    wfp_blocking_active: true,
+                    detected_apps: detected_app_strings,
+                    blocked_ip_count: self.resolved_ips.len(),
+                    needs_elevation: false,
+                    detail: format!(
+                        "WFP-блокировка активна: без VPN трафик Claude/Anthropic ({} прилож., {} IP) заблокирован от РФ-утечек.",
+                        self.detected_apps.len(),
+                        self.resolved_ips.len()
+                    ),
+                };
+            }
+            Err((needs_uac, msg)) => {
+                self.last_signature = None;
+                self.last_status = crate::models::ClaudeGuardStatus {
+                    enabled: true,
+                    block_without_vpn: true,
+                    wfp_blocking_active: false,
+                    detected_apps: detected_app_strings,
+                    blocked_ip_count: self.resolved_ips.len(),
+                    needs_elevation: needs_uac || !elevated,
+                    detail: msg,
+                };
+            }
+        }
+        self.last_status.clone()
+    }
+}
+
 pub fn firewall_rule_exists_in_os() -> Option<bool> {
     firewall_rule_exists(&netsh_exe_path())
 }

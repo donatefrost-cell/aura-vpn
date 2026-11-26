@@ -25,6 +25,8 @@ export function TunManagerPanel({
 
   const [snap, setSnap] = useState<TunManagerSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
+  const [alwaysAdmin, setAlwaysAdmin] = useState(false);
+  const [togglingAdmin, setTogglingAdmin] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mtuDraft, setMtuDraft] = useState(tun.mtu);
   const [adapterNameDraft, setAdapterNameDraft] = useState(tun.adapterName);
@@ -42,8 +44,9 @@ export function TunManagerPanel({
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await api.getTunStatus();
+      const [res, diag] = await Promise.all([api.getTunStatus(), api.getDiagnostics()]);
       setSnap(res);
+      setAlwaysAdmin(Boolean(diag.alwaysRunAsAdmin));
     } catch (err) {
       setLoadError(typeof err === 'string' ? err : String(err));
     } finally {
@@ -115,8 +118,25 @@ export function TunManagerPanel({
                 {snap.adapter.wintunIntegrityOk ? 'SHA-256 OK' : 'Не проверен / отсутствует'}
               </M3StatusBadge>
             </div>
-            <div className="text-[var(--md-on-surface-variant)]">
-              Права процесса: <span className="font-semibold text-[var(--md-on-surface)]">{snap.adapter.isElevated ? 'Администратор (UAC)' : 'Обычный пользователь'}</span>
+            <div className="flex flex-wrap items-center gap-2 text-[var(--md-on-surface-variant)]">
+              <span>
+                Права процесса: <span className="font-semibold text-[var(--md-on-surface)]">{snap.adapter.isElevated ? 'Администратор (UAC)' : 'Обычный пользователь'}</span>
+              </span>
+              <M3Button
+                size="sm"
+                variant={alwaysAdmin ? 'tonal' : 'outlined'}
+                loading={togglingAdmin}
+                onClick={() => {
+                  const next = !alwaysAdmin;
+                  setTogglingAdmin(true);
+                  void api
+                    .setAlwaysAdmin(next, next && !snap.adapter.isElevated)
+                    .then((diag) => setAlwaysAdmin(Boolean(diag.alwaysRunAsAdmin)))
+                    .finally(() => setTogglingAdmin(false));
+                }}
+              >
+                {alwaysAdmin ? 'Права админа: навсегда' : 'Права администратора навсегда'}
+              </M3Button>
             </div>
             <div className="text-[var(--md-on-surface-variant)]">
               Драйвер: <span className="font-semibold text-[var(--md-on-surface)]">{snap.adapter.driverStatus}</span>

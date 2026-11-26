@@ -386,6 +386,7 @@ mod tests {
             wintun_available: true,
             awg_available: true,
             is_elevated: true,
+            always_run_as_admin: false,
             kill_switch_engaged: false,
             system_proxy_active: false,
             active_proxy_endpoint: None,

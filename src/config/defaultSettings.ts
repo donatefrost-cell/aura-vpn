@@ -110,6 +110,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
     splitApps: [],
     customRules: [],
     rulepackUpdateUrl: null,
+    claudeGuard: {
+      enabled: false,
+      blockWithoutVpn: true,
+      extraApps: [],
+    },
   },
 };
 

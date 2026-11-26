@@ -344,6 +344,22 @@ export interface RuCategoriesConfig {
   otherRu: boolean;
 }
 
+export interface ClaudeGuardConfig {
+  enabled: boolean;
+  blockWithoutVpn: boolean;
+  extraApps: string[];
+}
+
+export interface ClaudeGuardStatus {
+  enabled: boolean;
+  blockWithoutVpn: boolean;
+  wfpBlockingActive: boolean;
+  detectedApps: string[];
+  blockedIpCount: number;
+  needsElevation: boolean;
+  detail: string;
+}
+
 export interface RoutingConfig {
   profile: RoutingProfile;
   bypassLan: boolean;
@@ -353,6 +369,7 @@ export interface RoutingConfig {
   splitApps: string[];
   customRules: RoutingRule[];
   rulepackUpdateUrl?: string | null;
+  claudeGuard?: ClaudeGuardConfig;
 }
 
 export interface DnsConfig {
@@ -471,6 +488,7 @@ export interface ConnectionSnapshot {
   localSocksPort?: number | null;
   health?: TunnelHealthSnapshot;
   killSwitch?: KillSwitchSnapshot;
+  claudeGuard?: ClaudeGuardStatus;
 }
 
 export interface TrafficStats {
@@ -508,6 +526,7 @@ export interface CoreDiagnostics {
   wintunAvailable: boolean;
   awgAvailable: boolean;
   isElevated: boolean;
+  alwaysRunAsAdmin?: boolean;
   killSwitchEngaged: boolean;
   systemProxyActive: boolean;
   activeProxyEndpoint?: string | null;

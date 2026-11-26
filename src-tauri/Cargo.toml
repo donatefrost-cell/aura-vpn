@@ -1,6 +1,6 @@
 [package]
 name = "aura-vpn"
-version = "1.0.0-rc.1"
+version = "1.0.0-rc.2"
 license = "Apache-2.0"
 description = "AURA VPN — Windows desktop proxy/VPN client powered by Xray-core and AmneziaWG"
 authors = ["AURA VPN"]

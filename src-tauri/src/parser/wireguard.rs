@@ -27,11 +27,7 @@ pub fn is_safe_ini_token(s: &str) -> bool {
 
 pub fn is_safe_cps_token(s: &str) -> bool {
     let t = s.trim();
-    !t.is_empty()
-        && t.len() <= 4096
-        && !t
-            .chars()
-            .any(|c| c.is_control() || matches!(c, '[' | ']' | '#' | ';'))
+    !t.is_empty() && t.len() <= 4096 && !t.chars().any(|c| c.is_control() || matches!(c, '[' | ']'))
 }
 
 fn is_valid_awg_h_value(tv: &str) -> bool {
@@ -203,7 +199,21 @@ pub fn parse_wg_ini(
     let mut peer: HashMap<String, String> = HashMap::new();
 
     for line in raw_ini.lines() {
-        let no_comment = line.split(['#', ';']).next().unwrap_or("").trim();
+        let trimmed_line = line.trim();
+        if trimmed_line.is_empty() {
+            continue;
+        }
+        let is_cps_line = trimmed_line.split_once('=').is_some_and(|(k, _)| {
+            matches!(
+                k.trim().to_ascii_lowercase().as_str(),
+                "i1" | "i2" | "i3" | "i4" | "i5"
+            )
+        });
+        let no_comment = if is_cps_line {
+            trimmed_line.split('#').next().unwrap_or("").trim()
+        } else {
+            trimmed_line.split(['#', ';']).next().unwrap_or("").trim()
+        };
         if no_comment.is_empty() {
             continue;
         }

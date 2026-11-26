@@ -96,6 +96,11 @@ function defaultPreviewRouting(): RoutingConfig {
       },
     ],
     rulepackUpdateUrl: null,
+    claudeGuard: {
+      enabled: false,
+      blockWithoutVpn: true,
+      extraApps: [],
+    },
   };
 }
 
@@ -508,6 +513,7 @@ export function getPreviewSeedState(): BootstrapState {
         wintunAvailable: true,
         awgAvailable: true,
         isElevated: false,
+        alwaysRunAsAdmin: false,
         killSwitchEngaged: false,
         systemProxyActive: false,
         activeProxyEndpoint: null,
@@ -1131,6 +1137,15 @@ export const previewApi = {
 
   async getDiagnostics(): Promise<CoreDiagnostics> {
     return getPreviewSeedState().diagnostics;
+  },
+
+  async setAlwaysAdmin(enabled: boolean, _relaunchNow = false): Promise<CoreDiagnostics> {
+    const s = getPreviewSeedState();
+    s.diagnostics = {
+      ...s.diagnostics,
+      alwaysRunAsAdmin: enabled,
+    };
+    return s.diagnostics;
   },
 
   async bulkDeleteServers(ids: string[]): Promise<BootstrapState> {

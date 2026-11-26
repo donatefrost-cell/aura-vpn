@@ -6,8 +6,135 @@ use crate::models::{
 };
 use crate::routing_rules::{
     collect_active_ru_domains, default_rulepack, effective_split_mode, RulepackData,
+    CLAUDE_ANTHROPIC_DOMAINS, CLAUDE_PROCESS_NAMES,
 };
 use serde_json::{json, Map, Value};
+
+#[cfg(windows)]
+fn utf16_slice_to_string(buf: &[u16]) -> String {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16_lossy(&buf[..len]).trim().to_string()
+}
+
+pub fn detect_physical_uplink_interface() -> Option<String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            FreeMibTable, GetIfTable2, MIB_IF_ROW2, MIB_IF_TABLE2,
+        };
+        unsafe {
+            let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+            if GetIfTable2(&mut table) != 0 || table.is_null() {
+                return None;
+            }
+            let count = (*table).NumEntries as usize;
+            let rows =
+                std::slice::from_raw_parts((*table).Table.as_ptr() as *const MIB_IF_ROW2, count);
+            let mut best: Option<(u32, u64, String)> = None;
+            for row in rows {
+                // IfOperStatusUp == 1, MediaConnectState == MediaConnectStateConnected (1)
+                if row.OperStatus != 1 {
+                    continue;
+                }
+                // Ethernet (6) or Wi-Fi IEEE 802.11 (71) only
+                if row.Type != 6 && row.Type != 71 {
+                    continue;
+                }
+                if (row.InterfaceAndOperStatusFlags._bitfield & 0x01) == 0 {
+                    continue;
+                }
+                let alias = utf16_slice_to_string(&row.Alias);
+                let desc = utf16_slice_to_string(&row.Description);
+                if alias.is_empty() {
+                    continue;
+                }
+                let low_a = alias.to_ascii_lowercase();
+                let low_d = desc.to_ascii_lowercase();
+                if low_a.contains("aura")
+                    || low_a.contains("amnezia")
+                    || low_a.contains("wireguard")
+                    || low_a.contains("wintun")
+                    || low_a.contains("vethernet")
+                    || low_a.contains("loopback")
+                    || low_d.contains("hyper-v")
+                    || low_d.contains("wsl")
+                    || low_d.contains("virtual")
+                    || low_d.contains("vmware")
+                    || low_d.contains("virtualbox")
+                    || low_d.contains("tap-")
+                    || low_d.contains("bluetooth")
+                    || low_d.contains("tailscale")
+                {
+                    continue;
+                }
+                let score_speed = row.TransmitLinkSpeed;
+                let prio = if row.Type == 6 { 2 } else { 1 };
+                let replace = match &best {
+                    None => true,
+                    Some((bp, bs, _)) => (prio, score_speed) > (*bp, *bs),
+                };
+                if replace {
+                    best = Some((prio, score_speed, alias));
+                }
+            }
+            FreeMibTable(table.cast());
+            best.map(|(_, _, a)| a)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+pub fn detect_conflicting_vpn_adapter(own_tun_name: &str) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            FreeMibTable, GetIfTable2, MIB_IF_ROW2, MIB_IF_TABLE2,
+        };
+        unsafe {
+            let mut table: *mut MIB_IF_TABLE2 = std::ptr::null_mut();
+            if GetIfTable2(&mut table) != 0 || table.is_null() {
+                return None;
+            }
+            let count = (*table).NumEntries as usize;
+            let rows =
+                std::slice::from_raw_parts((*table).Table.as_ptr() as *const MIB_IF_ROW2, count);
+            let own_low = own_tun_name.trim().to_ascii_lowercase();
+            let mut found = None;
+            for row in rows {
+                if row.OperStatus != 1 {
+                    continue;
+                }
+                let alias = utf16_slice_to_string(&row.Alias);
+                let desc = utf16_slice_to_string(&row.Description);
+                let low_a = alias.to_ascii_lowercase();
+                let low_d = desc.to_ascii_lowercase();
+                if low_a == own_low {
+                    continue;
+                }
+                if low_a.contains("amnezia")
+                    || low_d.contains("amnezia")
+                    || low_d.contains("wireguard tunnel")
+                    || low_d.contains("wintun")
+                    || low_d.contains("openvpn")
+                    || low_d.contains("tap-windows")
+                {
+                    found = Some(alias);
+                    break;
+                }
+            }
+            FreeMibTable(table.cast());
+            found
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = own_tun_name;
+        None
+    }
+}
 
 fn apply_v26_tls_pinning(
     tls: &mut Map<String, Value>,
@@ -542,17 +669,32 @@ pub fn generate_wireproxy_awg_config_with_dns(
     lines.push(format!("PrivateKey = {}", d.secret_key.trim()));
     lines.push(format!("Address = {}", d.address.join(", ")));
 
+    let has_ipv6_addr = d.address.iter().any(|a| a.contains(':'));
     let user_ip_dns = user_primary_dns
         .map(|s| s.trim())
-        .filter(|s| s.parse::<std::net::IpAddr>().is_ok())
+        .filter(|s| {
+            s.parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| has_ipv6_addr || ip.is_ipv4())
+        })
         .map(|s| s.to_string());
 
     if let Some(override_dns) = user_ip_dns {
         lines.push(format!("DNS = {override_dns}"));
-    } else if !d.dns.is_empty() {
-        lines.push(format!("DNS = {}", d.dns.join(", ")));
     } else {
-        lines.push("DNS = 1.1.1.1".to_string());
+        let filtered_dns: Vec<String> = d
+            .dns
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| {
+                s.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| has_ipv6_addr || ip.is_ipv4())
+            })
+            .collect();
+        if !filtered_dns.is_empty() {
+            lines.push(format!("DNS = {}", filtered_dns.join(", ")));
+        } else {
+            lines.push("DNS = 1.1.1.1".to_string());
+        }
     }
     if let Some(mtu) = d.mtu {
         lines.push(format!("MTU = {mtu}"));
@@ -589,7 +731,11 @@ pub fn generate_wireproxy_awg_config_with_dns(
         }
     }
     lines.push(format!("Endpoint = {}", d.endpoint.trim()));
-    lines.push("AllowedIPs = 0.0.0.0/0, ::/0".to_string());
+    if has_ipv6_addr {
+        lines.push("AllowedIPs = 0.0.0.0/0, ::/0".to_string());
+    } else {
+        lines.push("AllowedIPs = 0.0.0.0/0".to_string());
+    }
     lines.push(format!(
         "PersistentKeepalive = {}",
         d.keepalive.unwrap_or(25)
@@ -655,6 +801,7 @@ fn build_routing_rules(
     proxy_target: &ProxyRouteTarget,
     active_ru_domains: &[String],
     ipv6_enabled: bool,
+    awg_endpoint: Option<(&str, u16)>,
 ) -> Vec<Value> {
     let mut rules = Vec::new();
     let split_mode = effective_split_mode(routing);
@@ -669,15 +816,37 @@ fn build_routing_rules(
             "port": "53",
             "outboundTag": "dns-out"
         }));
+        // Always bypass loopback so internal SOCKS5 bridge (127.0.0.1) works even if bypass_lan = false
+        rules.push(json!({
+            "type": "field",
+            "ip": ["127.0.0.0/8", "::1/128"],
+            "outboundTag": "direct"
+        }));
     }
 
     // Priority 1a: Prevent Xray/wireproxy process loops (only needed/supported in TUN mode)
     if is_tun {
         rules.push(json!({
             "type": "field",
-            "process": ["self/", "xray/", "wireproxy-awg"],
+            "process": ["self/", "xray/", "xray.exe", "wireproxy-awg", "wireproxy-awg.exe"],
             "outboundTag": "direct"
         }));
+        if let Some((ep_host, ep_port)) = awg_endpoint {
+            let clean_ep = ep_host.trim().trim_start_matches('[').trim_end_matches(']');
+            if !clean_ep.is_empty() && ep_port > 0 {
+                let mut awg_ep_rule = Map::new();
+                awg_ep_rule.insert("type".to_string(), json!("field"));
+                awg_ep_rule.insert("network".to_string(), json!("udp"));
+                awg_ep_rule.insert("port".to_string(), json!(ep_port.to_string()));
+                if clean_ep.parse::<std::net::IpAddr>().is_ok() {
+                    awg_ep_rule.insert("ip".to_string(), json!([clean_ep]));
+                } else {
+                    awg_ep_rule.insert("domain".to_string(), json!([format!("full:{clean_ep}")]));
+                }
+                awg_ep_rule.insert("outboundTag".to_string(), json!("direct"));
+                rules.push(Value::Object(awg_ep_rule));
+            }
+        }
     }
 
     // Priority 1b: Private LAN IPv4 & IPv6 ranges directly
@@ -705,6 +874,36 @@ fn build_routing_rules(
             "ip": ["::/0"],
             "outboundTag": "block"
         }));
+    }
+
+    // Priority 1d: Claude / Anthropic Always-VPN Guard (overrides custom rules, Split Tunneling, and RuDirect)
+    if routing.claude_guard.enabled {
+        let mut claude_dom_rule = Map::new();
+        claude_dom_rule.insert("type".to_string(), json!("field"));
+        claude_dom_rule.insert("domain".to_string(), json!(CLAUDE_ANTHROPIC_DOMAINS));
+        proxy_target.apply_to_rule(&mut claude_dom_rule);
+        rules.push(Value::Object(claude_dom_rule));
+
+        if is_tun {
+            let mut claude_procs: Vec<String> =
+                CLAUDE_PROCESS_NAMES.iter().map(|s| s.to_string()).collect();
+            for extra in &routing.claude_guard.extra_apps {
+                let t = extra.trim();
+                if !t.is_empty()
+                    && !t
+                        .chars()
+                        .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':' | '*'))
+                    && !claude_procs.iter().any(|x| x.eq_ignore_ascii_case(t))
+                {
+                    claude_procs.push(t.to_string());
+                }
+            }
+            let mut claude_proc_rule = Map::new();
+            claude_proc_rule.insert("type".to_string(), json!("field"));
+            claude_proc_rule.insert("process".to_string(), json!(claude_procs));
+            proxy_target.apply_to_rule(&mut claude_proc_rule);
+            rules.push(Value::Object(claude_proc_rule));
+        }
     }
 
     // Priority 2: User custom rules (ordered top-to-bottom, overrides RU categories)
@@ -1546,6 +1745,12 @@ pub fn generate_xray_config_with_options(
         json!(["0.0.0.0/0", "::/0"])
     };
 
+    let physical_uplink = if mode == ConnectionMode::Tun {
+        detect_physical_uplink_interface()
+    } else {
+        None
+    };
+
     let inbounds = match mode {
         ConnectionMode::SystemProxy => json!([
             {
@@ -1578,30 +1783,38 @@ pub fn generate_xray_config_with_options(
                 }
             }
         ]),
-        ConnectionMode::Tun => json!([
-            {
-                "tag": "tun-in",
-                "protocol": "tun",
-                "settings": {
-                    "name": tun_name,
-                    "MTU": effective_tun_mtu,
-                    "gateway": tun_gateways,
-                    "dns": tun_dns_list,
-                    "autoSystemRoutingTable": tun_routes,
-                    "autoOutboundsInterface": "auto"
-                },
-                "sniffing": {
-                    "enabled": true,
-                    "destOverride": ["http", "tls", "quic"],
-                    "routeOnly": false
-                }
+        ConnectionMode::Tun => {
+            let mut tun_settings = Map::new();
+            tun_settings.insert("name".to_string(), json!(tun_name));
+            tun_settings.insert("MTU".to_string(), json!(effective_tun_mtu));
+            tun_settings.insert("gateway".to_string(), tun_gateways);
+            tun_settings.insert("dns".to_string(), json!(tun_dns_list));
+            tun_settings.insert("autoSystemRoutingTable".to_string(), tun_routes);
+            if awg_socks_port.is_none() {
+                let auto_iface = physical_uplink
+                    .clone()
+                    .unwrap_or_else(|| "auto".to_string());
+                tun_settings.insert("autoOutboundsInterface".to_string(), json!(auto_iface));
             }
-        ]),
+            json!([
+                {
+                    "tag": "tun-in",
+                    "protocol": "tun",
+                    "settings": Value::Object(tun_settings),
+                    "sniffing": {
+                        "enabled": true,
+                        "destOverride": ["http", "tls", "quic"],
+                        "routeOnly": false
+                    }
+                }
+            ])
+        }
     };
 
     let active_ru_domains = collect_active_ru_domains(routing, rulepack);
     let effective_private_direct =
         route_private_direct && (mode != ConnectionMode::Tun || options.tun.bypass_lan);
+    let awg_ep_info = awg_socks_port.map(|_| (profile.address.as_str(), profile.port));
     let mut rules = build_routing_rules(
         routing,
         mode,
@@ -1609,6 +1822,7 @@ pub fn generate_xray_config_with_options(
         &proxy_target,
         &active_ru_domains,
         ipv6_enabled,
+        awg_ep_info,
     );
 
     let dns_needed = mode == ConnectionMode::Tun
@@ -1662,6 +1876,16 @@ pub fn generate_xray_config_with_options(
                 v
             }
         };
+        if routing.claude_guard.enabled && dns_mode != "vpn" {
+            servers.insert(
+                0,
+                json!({
+                    "address": primary_dns,
+                    "domains": CLAUDE_ANTHROPIC_DOMAINS,
+                    "skipFallback": true
+                }),
+            );
+        }
         if servers.is_empty() {
             servers.push(json!("1.1.1.1"));
         }
@@ -1676,6 +1900,14 @@ pub fn generate_xray_config_with_options(
                 "domain": [format!("full:{}", profile.address.trim())],
                 "outboundTag": "direct"
             }));
+        }
+        if routing.claude_guard.enabled {
+            let mut claude_dns_rule = Map::new();
+            claude_dns_rule.insert("type".to_string(), json!("field"));
+            claude_dns_rule.insert("inboundTag".to_string(), json!(["dns-query"]));
+            claude_dns_rule.insert("domain".to_string(), json!(CLAUDE_ANTHROPIC_DOMAINS));
+            proxy_target.apply_to_rule(&mut claude_dns_rule);
+            dns_rules.push(Value::Object(claude_dns_rule));
         }
         if dns_mode == "direct" || dns_mode == "system" {
             dns_rules.push(json!({
@@ -1773,11 +2005,33 @@ pub fn generate_xray_config_with_options(
     let mut all_outbounds = Vec::with_capacity(4 + extra_outbounds.len());
     all_outbounds.push(primary_outbound);
     all_outbounds.extend(extra_outbounds);
-    all_outbounds.push(json!({
-        "tag": "direct",
-        "protocol": "freedom",
-        "settings": {}
-    }));
+    let direct_outbound = if mode == ConnectionMode::Tun && awg_socks_port.is_some() {
+        if let Some(ref iface) = physical_uplink {
+            json!({
+                "tag": "direct",
+                "protocol": "freedom",
+                "settings": {},
+                "streamSettings": {
+                    "sockopt": {
+                        "interface": iface
+                    }
+                }
+            })
+        } else {
+            json!({
+                "tag": "direct",
+                "protocol": "freedom",
+                "settings": {}
+            })
+        }
+    } else {
+        json!({
+            "tag": "direct",
+            "protocol": "freedom",
+            "settings": {}
+        })
+    };
+    all_outbounds.push(direct_outbound);
     all_outbounds.push(json!({
         "tag": "block",
         "protocol": "blackhole",
@@ -2213,6 +2467,101 @@ mod tests {
         assert_eq!(
             cfg["routing"]["balancers"][0]["selector"][0].as_str(),
             Some("proxy-")
+        );
+    }
+
+    #[test]
+    fn wireproxy_awg_ipv4_omits_ipv6_allowed_ips_and_tun_claude_guard_overrides_ru_direct() {
+        let awg = crate::models::AmneziaWgDetails {
+            secret_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            address: vec!["10.8.1.2/32".to_string()],
+            public_key: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=".to_string(),
+            preshared_key: None,
+            endpoint: "198.51.100.44:51820".to_string(),
+            mtu: Some(1280),
+            dns: vec!["1.1.1.1".to_string()],
+            jc: Some("4".to_string()),
+            jmin: Some("10".to_string()),
+            jmax: Some("50".to_string()),
+            s1: Some("20".to_string()),
+            s2: Some("30".to_string()),
+            h1: Some("100".to_string()),
+            h2: Some("200".to_string()),
+            h3: Some("300".to_string()),
+            h4: Some("400".to_string()),
+            extra_params: HashMap::from([("i1".to_string(), "<r 10>;<c 5>".to_string())]),
+            keepalive: Some(25),
+        };
+        let ini = generate_wireproxy_awg_config_with_dns(&awg, 21995, None).unwrap();
+        assert!(ini.contains("AllowedIPs = 0.0.0.0/0\n"));
+        assert!(!ini.contains("::/0"));
+        assert!(ini.contains("I1 = <r 10>;<c 5>"));
+
+        let mut awg_profile = sample_vless_profile();
+        awg_profile.id = "awg-1".to_string();
+        awg_profile.name = "AWG Test".to_string();
+        awg_profile.protocol = ProtocolType::AmneziaWg;
+        awg_profile.address = "198.51.100.44".to_string();
+        awg_profile.port = 51820;
+        awg_profile.details = ProtocolDetails::AmneziaWg(awg);
+
+        let mut routing = RoutingConfig {
+            profile: crate::models::RoutingProfile::RuDirect,
+            bypass_ru_domains: true,
+            ..Default::default()
+        };
+        routing.claude_guard.enabled = true;
+
+        let dns = DnsConfig {
+            mode: "direct".to_string(),
+            primary_dns: "https://1.1.1.1/dns-query".to_string(),
+            direct_dns: "https://common.dot.dns.yandex.net/dns-query".to_string(),
+            ..Default::default()
+        };
+
+        let cfg = generate_xray_config_with_options(
+            &awg_profile,
+            ConnectionMode::Tun,
+            10808,
+            10809,
+            None,
+            Some(21995),
+            &routing,
+            true,
+            &dns,
+            false,
+            "warning",
+            &default_rulepack(),
+            XrayGenOptions::default(),
+        );
+
+        let tun_in = cfg["inbounds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["tag"] == "tun-in")
+            .unwrap();
+        assert!(
+            tun_in["settings"].get("autoOutboundsInterface").is_none(),
+            "TUN AWG must not force autoOutboundsInterface so 127.0.0.1 wireproxy-awg works"
+        );
+
+        let rules = cfg["routing"]["rules"].as_array().unwrap();
+        assert!(rules.iter().any(|r| {
+            r.get("outboundTag").and_then(|v| v.as_str()) == Some("direct")
+                && r.get("ip")
+                    .and_then(|ips| ips.as_array())
+                    .is_some_and(|arr| arr.iter().any(|x| x == "127.0.0.0/8"))
+        }));
+        assert!(rules.iter().any(|r| {
+            r.get("outboundTag").and_then(|v| v.as_str()) == Some("proxy")
+                && r.get("domain")
+                    .and_then(|d| d.as_array())
+                    .is_some_and(|arr| arr.iter().any(|x| x == "domain:claude.ai"))
+        }));
+        assert_eq!(
+            cfg["dns"]["servers"][0]["address"].as_str(),
+            Some("https://1.1.1.1/dns-query")
         );
     }
 }

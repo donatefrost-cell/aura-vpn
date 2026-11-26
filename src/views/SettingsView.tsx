@@ -98,6 +98,7 @@ interface SettingsViewProps {
   onSelectBehaviorProfile?: (id: BehaviorProfileId) => void;
   onRefreshBootstrap?: () => Promise<void>;
   onRelaunchAdmin: () => void;
+  onSetAlwaysAdmin?: (enabled: boolean, relaunchNow: boolean) => Promise<void>;
   onCheckUpdates: () => void;
   onOpenDiagnostics: () => void;
   onExportDiagnostics: () => Promise<void>;
@@ -145,6 +146,7 @@ export function SettingsView({
   onSelectBehaviorProfile,
   onRefreshBootstrap,
   onRelaunchAdmin,
+  onSetAlwaysAdmin,
   onCheckUpdates,
   onOpenDiagnostics,
   onExportDiagnostics,
@@ -163,6 +165,7 @@ export function SettingsView({
   const [pendingResetCategory, setPendingResetCategory] = useState<SettingsCategoryId | null>(null);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [savedCustomBadge, setSavedCustomBadge] = useState(false);
+  const [savingAlwaysAdmin, setSavingAlwaysAdmin] = useState(false);
 
   const [uiScaleDraft, setUiScaleDraft] = useState(settings.uiScale);
   const [customHexDraft, setCustomHexDraft] = useState(settings.customAccentHex ?? '#6366F1');
@@ -487,18 +490,48 @@ export function SettingsView({
                 </div>
               </SettingMetaRow>
 
-              <M3SurfaceCard level="default" className="flex flex-wrap items-center justify-between gap-2 p-3.5">
-                <div className="text-[0.75rem]">
-                  <span className="font-bold">Права процесса (UAC): </span>
-                  <M3StatusBadge tone={diagnostics.isElevated ? 'success' : 'neutral'}>
-                    {diagnostics.isElevated ? 'Администратор' : 'Обычный пользователь'}
-                  </M3StatusBadge>
+              <M3SurfaceCard level="default" className="space-y-3 p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2 text-[0.75rem]">
+                    <span className="font-bold">Права процесса (UAC): </span>
+                    <M3StatusBadge tone={diagnostics.isElevated ? 'success' : 'neutral'}>
+                      {diagnostics.isElevated ? 'Администратор' : 'Обычный пользователь'}
+                    </M3StatusBadge>
+                    {diagnostics.alwaysRunAsAdmin && (
+                      <M3StatusBadge tone="primary">Включено навсегда</M3StatusBadge>
+                    )}
+                  </div>
+                  {!diagnostics.isElevated && (
+                    <M3Button size="sm" variant="tonal" onClick={onRelaunchAdmin}>
+                      Перезапустить от администратора
+                    </M3Button>
+                  )}
                 </div>
-                {!diagnostics.isElevated && (
-                  <M3Button size="sm" variant="tonal" onClick={onRelaunchAdmin}>
-                    Перезапустить от администратора
-                  </M3Button>
-                )}
+
+                <div className="flex items-center justify-between gap-3 rounded-xl bg-[var(--md-surface-container-low)] px-3 py-2">
+                  <div className="min-w-0">
+                    <div className="text-[0.75rem] font-semibold text-[var(--md-on-surface)]">
+                      Права администратора навсегда
+                    </div>
+                    <div className="text-[0.68rem] text-[var(--md-on-surface-variant)]">
+                      Закрепляет запуск с правами администратора в Windows (RUNASADMIN и Планировщик для автозапуска), чтобы стабильно работали TUN и WFP-блокировка.
+                    </div>
+                  </div>
+                  <M3Switch
+                    checked={Boolean(diagnostics.alwaysRunAsAdmin)}
+                    disabled={savingAlwaysAdmin}
+                    onChange={(enabled) => {
+                      setSavingAlwaysAdmin(true);
+                      const handler =
+                        onSetAlwaysAdmin ??
+                        ((en: boolean, r: boolean) => api.setAlwaysAdmin(en, r).then(() => {}));
+                      void handler(enabled, enabled && !diagnostics.isElevated).finally(() =>
+                        setSavingAlwaysAdmin(false),
+                      );
+                    }}
+                    ariaLabel="Права администратора навсегда"
+                  />
+                </div>
               </M3SurfaceCard>
             </div>
           )}

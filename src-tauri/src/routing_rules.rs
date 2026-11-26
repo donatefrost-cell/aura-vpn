@@ -902,6 +902,123 @@ fn action_to_str(action: RuleAction) -> &'static str {
     }
 }
 
+pub const CLAUDE_ANTHROPIC_DOMAINS: &[&str] = &[
+    "domain:claude.ai",
+    "domain:claude.com",
+    "domain:clau.de",
+    "domain:anthropic.com",
+    "domain:claudeusercontent.com",
+    "domain:anthropic.ai",
+    "domain:statsig.anthropic.com",
+    "domain:servd-anthropic-website.b-cdn.net",
+];
+
+pub const CLAUDE_RESOLVE_HOSTS: &[&str] = &[
+    "claude.ai",
+    "api.anthropic.com",
+    "anthropic.com",
+    "console.anthropic.com",
+    "claude.com",
+    "statsig.anthropic.com",
+];
+
+pub const CLAUDE_PROCESS_NAMES: &[&str] = &["claude.exe", "Claude.exe", "claude-code.exe"];
+
+pub fn matches_claude_domain(host: &str) -> Option<&'static str> {
+    let norm = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    for rule in CLAUDE_ANTHROPIC_DOMAINS {
+        let dom = rule.strip_prefix("domain:").unwrap_or(rule);
+        if norm == dom || norm.ends_with(&format!(".{dom}")) {
+            return Some(rule);
+        }
+    }
+    None
+}
+
+pub fn matches_claude_process(proc_name: &str, extra_apps: &[String]) -> bool {
+    let low = proc_name.trim().to_ascii_lowercase();
+    if low.is_empty() {
+        return false;
+    }
+    let file_part = low.rsplit(['\\', '/']).next().unwrap_or(&low);
+    if CLAUDE_PROCESS_NAMES
+        .iter()
+        .any(|p| file_part == p.to_ascii_lowercase())
+        || file_part == "claude"
+    {
+        return true;
+    }
+    extra_apps.iter().any(|app| {
+        let a = app.trim().to_ascii_lowercase();
+        !a.is_empty() && (file_part == a || low.contains(&a))
+    })
+}
+
+pub fn discover_claude_app_exes(extra_apps: &[String]) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push_if_valid = |p: PathBuf| {
+        if p.exists() && p.is_file() {
+            let key = p.to_string_lossy().to_ascii_lowercase();
+            if seen.insert(key) {
+                found.push(p);
+            }
+        }
+    };
+
+    #[cfg(windows)]
+    {
+        if let Ok(prog_files) = std::env::var("ProgramFiles") {
+            let win_apps = PathBuf::from(prog_files).join("WindowsApps");
+            if let Ok(entries) = fs::read_dir(&win_apps) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    if name.starts_with("claude_") {
+                        let base = entry.path();
+                        push_if_valid(base.join("Claude.exe"));
+                        push_if_valid(base.join("app").join("Claude.exe"));
+                    }
+                }
+            }
+        }
+        if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+            let la = PathBuf::from(local_app);
+            for rel in [
+                la.join("AnthropicClaude").join("claude.exe"),
+                la.join("Programs").join("claude").join("claude.exe"),
+                la.join("Claude").join("claude.exe"),
+            ] {
+                push_if_valid(rel);
+            }
+            for dir_name in ["AnthropicClaude", "Claude"] {
+                let root = la.join(dir_name);
+                if let Ok(entries) = fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let sub = entry.path();
+                        if sub.is_dir() {
+                            push_if_valid(sub.join("claude.exe"));
+                            push_if_valid(sub.join("Claude.exe"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for extra in extra_apps {
+        let trimmed = extra.trim();
+        if trimmed.is_empty() || trimmed.len() > 260 {
+            continue;
+        }
+        let p = PathBuf::from(trimmed);
+        if p.is_absolute() {
+            push_if_valid(p);
+        }
+    }
+
+    found
+}
+
 pub fn evaluate_route(
     query: &str,
     process: Option<&str>,
@@ -930,6 +1047,47 @@ pub fn evaluate_route(
             requires_tun_note: false,
             is_config_analysis: true,
         };
+    }
+
+    // Priority 1d: Claude / Anthropic Always-VPN Guard (overrides RuDirect & OnlyApps)
+    if routing.claude_guard.enabled {
+        if let Some(matched_dom) = matches_claude_domain(&host) {
+            return RouteTestResult {
+                query: query.trim().to_string(),
+                normalized_host: host,
+                action: "proxy".to_string(),
+                priority_label: "Приоритет 1 • Защита Claude (Always-VPN)".to_string(),
+                matched_rule: matched_dom.to_string(),
+                matched_category: Some("Claude & Anthropic".to_string()),
+                explanation:
+                    "Домен Claude / Anthropic принудительно направляется через VPN и защищён от утечек РФ-трафика."
+                        .to_string(),
+                requires_tun_note: false,
+                is_config_analysis: true,
+            };
+        }
+        if let Some(ref proc_name) = clean_proc {
+            if matches_claude_process(proc_name, &routing.claude_guard.extra_apps) {
+                let needs_tun = mode == ConnectionMode::SystemProxy;
+                return RouteTestResult {
+                    query: query.trim().to_string(),
+                    normalized_host: host,
+                    action: "proxy".to_string(),
+                    priority_label: "Приоритет 1 • Защита Claude (Always-VPN)".to_string(),
+                    matched_rule: proc_name.clone(),
+                    matched_category: Some("Claude Desktop / CLI".to_string()),
+                    explanation: if needs_tun {
+                        "Процесс Claude защищён правилом Always-VPN. Для перехвата всех процессов на уровне ОС рекомендуется режим TUN."
+                            .to_string()
+                    } else {
+                        "Весь трафик процесса Claude направляется исключительно через VPN-туннель."
+                            .to_string()
+                    },
+                    requires_tun_note: needs_tun,
+                    is_config_analysis: true,
+                };
+            }
+        }
     }
 
     // Priority 2: User custom rules (strictly ordered)
@@ -1234,5 +1392,70 @@ mod tests {
         assert!(is_rulepack_downgrade("2026.9.1", "2026.11.1"));
         assert!(!is_rulepack_downgrade("2026.11.10", "2026.11.2"));
         assert!(!is_rulepack_downgrade("2026.11.2", "2026.11.2"));
+    }
+
+    #[test]
+    fn claude_guard_overrides_ru_direct_and_only_apps() {
+        let mut cfg = RoutingConfig {
+            profile: RoutingProfile::RuDirect,
+            bypass_ru_domains: true,
+            split_tunnel_mode: SplitTunnelMode::OnlyApps,
+            split_apps: vec!["chrome.exe".to_string()],
+            claude_guard: crate::models::ClaudeGuardConfig {
+                enabled: true,
+                block_without_vpn: true,
+                extra_apps: vec!["claude-helper.exe".to_string()],
+            },
+            ..Default::default()
+        };
+        let pack = default_rulepack();
+
+        let web = evaluate_route(
+            "https://claude.ai/chat",
+            Some("chrome.exe"),
+            &cfg,
+            ConnectionMode::Tun,
+            &pack,
+        );
+        assert_eq!(web.action, "proxy");
+
+        let api = evaluate_route(
+            "api.anthropic.com",
+            Some("other.exe"),
+            &cfg,
+            ConnectionMode::Tun,
+            &pack,
+        );
+        assert_eq!(api.action, "proxy");
+
+        let proc_match = evaluate_route(
+            "example.com",
+            Some("Claude.exe"),
+            &cfg,
+            ConnectionMode::Tun,
+            &pack,
+        );
+        assert_eq!(proc_match.action, "proxy");
+
+        let extra_proc = evaluate_route(
+            "example.com",
+            Some("claude-helper.exe"),
+            &cfg,
+            ConnectionMode::Tun,
+            &pack,
+        );
+        assert_eq!(extra_proc.action, "proxy");
+
+        // When disabled, OnlyApps falls back to Direct for non-listed processes
+        cfg.claude_guard.enabled = false;
+        cfg.profile = RoutingProfile::OnlyApps;
+        let disabled_res = evaluate_route(
+            "claude.ai",
+            Some("Claude.exe"),
+            &cfg,
+            ConnectionMode::Tun,
+            &pack,
+        );
+        assert_eq!(disabled_res.action, "direct");
     }
 }

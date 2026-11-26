@@ -1171,6 +1171,49 @@ export function App() {
     }
   };
 
+  const handleSetAlwaysAdmin = async (enabled: boolean, relaunchNow = false) => {
+    try {
+      const updatedDiag = await api.setAlwaysAdmin(enabled, relaunchNow);
+      setState((prev) => (prev ? { ...prev, diagnostics: updatedDiag } : prev));
+      pushToast(
+        'success',
+        enabled ? 'Права администратора закреплены навсегда' : 'Автоповышение прав отключено',
+        enabled
+          ? updatedDiag.isElevated
+            ? 'Параметр RUNASADMIN записан для последующих запусков.'
+            : 'Флаг RUNASADMIN записан — перезапустите приложение с правами администратора.'
+          : 'Приложение будет запускаться с обычными правами.',
+      );
+    } catch (err) {
+      pushToast(
+        'error',
+        'Не удалось изменить постоянные права администратора',
+        typeof err === 'string' ? err : undefined,
+      );
+    }
+  };
+
+  const handleToggleClaudeGuard = () => {
+    void patchSettings((s) => {
+      const current = s.routing.claudeGuard ?? {
+        enabled: false,
+        blockWithoutVpn: true,
+        extraApps: [],
+      };
+      const nextEnabled = !current.enabled;
+      return {
+        ...s,
+        routing: {
+          ...s.routing,
+          claudeGuard: {
+            ...current,
+            enabled: nextEnabled,
+          },
+        },
+      };
+    });
+  };
+
   const handleCheckUpdates = async () => {
     setIsCheckingUpdates(true);
     try {
@@ -1547,6 +1590,7 @@ export function App() {
                 }
                 onToggleRuDirect={handleToggleRuDirect}
                 onToggleKillSwitch={toggleQuickKillSwitch}
+                onToggleClaudeGuard={handleToggleClaudeGuard}
                 onSelectBehaviorProfile={handleSelectBehaviorProfile}
                 onOpenImport={() => {
                   setImportPrefill('');
@@ -1623,7 +1667,10 @@ export function App() {
                   {tab === 'routing' && (
                     <RoutingView
                       settings={state.settings}
+                      connection={state.connection}
+                      diagnostics={state.diagnostics}
                       rulepackStatus={rulepackStatus}
+                      onSetAlwaysAdmin={handleSetAlwaysAdmin}
                       onUpdateRouting={(routing) =>
                         void patchSettings((s) => ({ ...s, routing }))
                       }
@@ -1669,6 +1716,7 @@ export function App() {
                       }}
                       onSelectBehaviorProfile={handleSelectBehaviorProfile}
                       onRelaunchAdmin={() => void handleRelaunchAsAdmin()}
+                      onSetAlwaysAdmin={handleSetAlwaysAdmin}
                       onCheckUpdates={() => void handleCheckUpdates()}
                       onOpenDiagnostics={() => void handleOpenDiagnostics()}
                       onExportDiagnostics={handleExportDiagnostics}

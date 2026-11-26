@@ -470,6 +470,24 @@ impl Default for RuCategoriesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct ClaudeGuardConfig {
+    pub enabled: bool,
+    pub block_without_vpn: bool,
+    pub extra_apps: Vec<String>,
+}
+
+impl Default for ClaudeGuardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            block_without_vpn: true,
+            extra_apps: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct RoutingConfig {
     pub profile: RoutingProfile,
     pub bypass_lan: bool,
@@ -479,6 +497,8 @@ pub struct RoutingConfig {
     pub split_apps: Vec<String>,
     pub custom_rules: Vec<RoutingRule>,
     pub rulepack_update_url: Option<String>,
+    #[serde(default)]
+    pub claude_guard: ClaudeGuardConfig,
 }
 
 impl Default for RoutingConfig {
@@ -492,6 +512,7 @@ impl Default for RoutingConfig {
             split_apps: Vec::new(),
             custom_rules: Vec::new(),
             rulepack_update_url: None,
+            claude_guard: ClaudeGuardConfig::default(),
         }
     }
 }
@@ -928,6 +949,18 @@ pub struct TunnelHealthSnapshot {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ClaudeGuardStatus {
+    pub enabled: bool,
+    pub block_without_vpn: bool,
+    pub wfp_blocking_active: bool,
+    pub detected_apps: Vec<String>,
+    pub blocked_ip_count: usize,
+    pub needs_elevation: bool,
+    pub detail: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionSnapshot {
@@ -947,6 +980,8 @@ pub struct ConnectionSnapshot {
     pub health: TunnelHealthSnapshot,
     #[serde(default)]
     pub kill_switch: KillSwitchSnapshot,
+    #[serde(default)]
+    pub claude_guard: ClaudeGuardStatus,
 }
 
 impl Default for ConnectionSnapshot {
@@ -965,6 +1000,7 @@ impl Default for ConnectionSnapshot {
             local_socks_port: None,
             health: TunnelHealthSnapshot::default(),
             kill_switch: KillSwitchSnapshot::default(),
+            claude_guard: ClaudeGuardStatus::default(),
         }
     }
 }
@@ -1015,6 +1051,8 @@ pub struct CoreDiagnostics {
     #[serde(default)]
     pub awg_available: bool,
     pub is_elevated: bool,
+    #[serde(default)]
+    pub always_run_as_admin: bool,
     pub kill_switch_engaged: bool,
     pub system_proxy_active: bool,
     pub active_proxy_endpoint: Option<String>,

@@ -2,24 +2,24 @@
   "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:3f51a5c7-59b3-4426-8c44-6af30e03da0a",
+  "serialNumber": "urn:uuid:752124ea-8892-4574-8b27-ae5de61590bf",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-11-26T11:09:28.593Z",
+    "timestamp": "2026-11-26T14:09:55.469Z",
     "tools": {
       "components": [
         {
           "type": "application",
           "name": "aura-sbom-generator",
-          "version": "1.0.0-rc.1"
+          "version": "1.0.0-rc.2"
         }
       ]
     },
     "component": {
-      "bom-ref": "pkg:generic/aura-vpn@1.0.0-rc.1",
+      "bom-ref": "pkg:generic/aura-vpn@1.0.0-rc.2",
       "type": "application",
       "name": "AURA VPN",
-      "version": "1.0.0-rc.1",
+      "version": "1.0.0-rc.2",
       "licenses": [
         {
           "license": {
@@ -27,7 +27,7 @@
           }
         }
       ],
-      "purl": "pkg:generic/aura-vpn@1.0.0-rc.1",
+      "purl": "pkg:generic/aura-vpn@1.0.0-rc.2",
       "properties": [
         {
           "name": "aura:identifier",
@@ -14592,7 +14592,7 @@
   ],
   "dependencies": [
     {
-      "ref": "pkg:generic/aura-vpn@1.0.0-rc.1",
+      "ref": "pkg:generic/aura-vpn@1.0.0-rc.2",
       "dependsOn": [
         "pkg:generic/xray-core@v26.11.9?arch=x86_64&os=windows",
         "pkg:generic/wireproxy-awg@v1.0.18?arch=x86_64&os=windows",

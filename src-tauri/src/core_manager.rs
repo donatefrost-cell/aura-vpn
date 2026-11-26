@@ -323,6 +323,7 @@ pub struct CoreManager {
     session_gen: Arc<AtomicU64>,
     cancel_tx: watch::Sender<u64>,
     kill_switch: tokio::sync::Mutex<KillSwitchState>,
+    claude_guard: tokio::sync::Mutex<crate::kill_switch::ClaudeGuardManager>,
     kill_switch_cfg: std::sync::RwLock<KillSwitchConfig>,
     routing_cfg: std::sync::RwLock<RoutingConfig>,
     active_settings: std::sync::RwLock<AppSettings>,
@@ -357,6 +358,7 @@ impl CoreManager {
             session_gen: Arc::new(AtomicU64::new(0)),
             cancel_tx,
             kill_switch: tokio::sync::Mutex::new(KillSwitchState::new(ks_path)),
+            claude_guard: tokio::sync::Mutex::new(crate::kill_switch::ClaudeGuardManager::new()),
             kill_switch_cfg: std::sync::RwLock::new(KillSwitchConfig::default()),
             routing_cfg: std::sync::RwLock::new(RoutingConfig::default()),
             active_settings: std::sync::RwLock::new(AppSettings::default()),
@@ -632,9 +634,20 @@ impl CoreManager {
             ks.snapshot()
         };
 
+        let claude_status = {
+            let mut cg = self.claude_guard.lock().await;
+            cg.resolve_claude_ips_if_needed(
+                settings.routing.claude_guard.enabled,
+                settings.routing.claude_guard.block_without_vpn,
+            )
+            .await;
+            cg.sync(&settings.routing.claude_guard, is_connected)
+        };
+
         self.update_snapshot(|s| {
             s.kill_switch_engaged = ks_snap.blocking_active;
             s.kill_switch = ks_snap.clone();
+            s.claude_guard = claude_status;
         });
         self.refresh_tray();
     }
@@ -1428,6 +1441,7 @@ impl CoreManager {
             wintun_available,
             awg_available,
             is_elevated: is_elevated(),
+            always_run_as_admin: crate::elevation::is_always_admin_enabled(),
             kill_switch_engaged,
             system_proxy_active,
             active_proxy_endpoint,
@@ -1441,7 +1455,11 @@ impl CoreManager {
 
     pub async fn ping_server(address: &str, port: u16) -> Option<u64> {
         let started = Instant::now();
-        let target = format!("{address}:{port}");
+        let target = if address.contains(':') && !address.starts_with('[') {
+            format!("[{address}]:{port}")
+        } else {
+            format!("{address}:{port}")
+        };
         let fut = TcpStream::connect(&target);
         match tokio::time::timeout(Duration::from_secs(4), fut).await {
             Ok(Ok(_stream)) => Some(started.elapsed().as_millis().max(1) as u64),
@@ -1582,6 +1600,18 @@ impl CoreManager {
                 let _ = ks.disengage_async().await;
             }
         }
+        let cg_status = {
+            let mut cg = self.claude_guard.lock().await;
+            cg.resolve_claude_ips_if_needed(
+                settings.routing.claude_guard.enabled,
+                settings.routing.claude_guard.block_without_vpn,
+            )
+            .await;
+            cg.sync(&settings.routing.claude_guard, false)
+        };
+        self.update_snapshot(|s| {
+            s.claude_guard = cg_status;
+        });
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1773,6 +1803,12 @@ impl CoreManager {
             ProtocolDetails::RawXray(d) if matches!(
                 d.outbound_json.get("protocol").and_then(|v| v.as_str()),
                 Some("hysteria") | Some("wireguard")
+            ) || matches!(
+                d.outbound_json
+                    .get("streamSettings")
+                    .and_then(|s| s.get("network"))
+                    .and_then(|v| v.as_str()),
+                Some("kcp") | Some("quic")
             )
         );
         let core_start_timeout_secs = settings.advanced.core_start_timeout_secs.clamp(3, 20);
@@ -1783,27 +1819,35 @@ impl CoreManager {
 
         let ks_blocks_pre_ping = keep_ks_guard || { self.kill_switch.lock().await.is_engaged() };
 
-        // Perform TCP reachability check BEFORE creating TUN routes or spawning child cores
-        // (unless Kill Switch is currently armed/blocking outbound sockets of aura-vpn.exe)
+        // Advisory TCP reachability check BEFORE creating TUN routes or spawning child cores
+        // (unless UDP-only or Kill Switch is currently blocking aura-vpn.exe sockets).
+        // Even if TCP pre-ping times out (e.g. CDN/ICMP filtering), continue and validate via tunnel probe.
         let latency = if is_udp_only || ks_blocks_pre_ping {
             None
         } else if has_multi_outbounds {
-            Self::ping_profile(&profile).await
+            let ms = Self::ping_profile(&profile).await;
+            if ms.is_none() {
+                self.logger.warn(
+                    "core",
+                    &format!(
+                        "Предварительная TCP-проверка {}:{} не ответила — пробуем прямое подключение...",
+                        profile.address, profile.port
+                    ),
+                );
+            }
+            ms
         } else {
             match Self::ping_server(&profile.address, profile.port).await {
                 Some(ms) => Some(ms),
                 None => {
-                    return Err(self.handle_connect_failure(
-                        &profile.id,
-                        CoreConnectError::ServerUnreachable {
-                            detail: format!(
-                                "Сервер {}:{} не отвечает (превышен таймаут TCP-подключения)",
-                                profile.address, profile.port
-                            ),
-                        },
-                        None,
-                        reconnecting_mode,
-                    ));
+                    self.logger.warn(
+                        "core",
+                        &format!(
+                            "Предварительная TCP-проверка {}:{} не ответила — пробуем прямое подключение...",
+                            profile.address, profile.port
+                        ),
+                    );
+                    None
                 }
             }
         };
@@ -2229,6 +2273,7 @@ impl CoreManager {
         } else {
             if let Err(err) = wait_for_tun_startup(
                 stats_api_port,
+                &settings.tun.adapter_name,
                 &child_arc,
                 &stderr_ring,
                 core_start_timeout_secs,
@@ -2376,6 +2421,15 @@ impl CoreManager {
             );
             ks.snapshot()
         };
+        let claude_status = {
+            let mut cg = self.claude_guard.lock().await;
+            cg.resolve_claude_ips_if_needed(
+                settings.routing.claude_guard.enabled,
+                settings.routing.claude_guard.block_without_vpn,
+            )
+            .await;
+            cg.sync(&settings.routing.claude_guard, true)
+        };
 
         let intentional_stop = Arc::new(AtomicBool::new(false));
         let telemetry_task = match mode {
@@ -2446,6 +2500,7 @@ impl CoreManager {
             s.system_proxy_enabled = apply_os_proxy;
             s.kill_switch_engaged = ks_snap.blocking_active;
             s.kill_switch = ks_snap;
+            s.claude_guard = claude_status;
             s.health = TunnelHealthSnapshot {
                 state: health_state,
                 consecutive_failures: 0,
@@ -2653,6 +2708,16 @@ impl CoreManager {
             let _ = restore_system_proxy(&self.storage.proxy_backup_path());
         }
 
+        let cg_status = {
+            let mut cg = self.claude_guard.lock().await;
+            cg.resolve_claude_ips_if_needed(
+                settings.routing.claude_guard.enabled,
+                settings.routing.claude_guard.block_without_vpn,
+            )
+            .await;
+            cg.sync(&settings.routing.claude_guard, false)
+        };
+
         self.counters.reset();
         self.emit_traffic(TrafficStats::default());
 
@@ -2668,6 +2733,7 @@ impl CoreManager {
                 s.system_proxy_enabled = ks_blocking && s.mode == ConnectionMode::SystemProxy;
                 s.kill_switch_engaged = ks_blocking;
                 s.kill_switch = ks_snap;
+                s.claude_guard = cg_status;
                 s.health = TunnelHealthSnapshot::default();
                 s.local_http_port = None;
                 s.local_socks_port = None;
@@ -3529,6 +3595,15 @@ impl CoreManager {
                         }
                     }
 
+                    // Fail-closed Claude Guard BEFORE reconnect attempts
+                    let cg_snap = {
+                        let mut cg = this.claude_guard.lock().await;
+                        cg.sync(&routing_live.claude_guard, false)
+                    };
+                    this.update_snapshot(|s| {
+                        s.claude_guard = cg_snap.clone();
+                    });
+
                     // Step 2: Run auto-reconnect (even when Kill Switch is armed, preserving blocking!)
                     let max_attempts = ks_cfg.reconnect_attempts.clamp(0, 10) as usize;
                     if settings.auto_reconnect && max_attempts > 0 {
@@ -3555,6 +3630,7 @@ impl CoreManager {
                                 s.connected_since = None;
                                 s.kill_switch_engaged = ks_engaged_ok;
                                 s.kill_switch = ks_snap_now;
+                                s.claude_guard = cg_snap.clone();
                                 s.health.state = TunnelHealthState::Lost;
                                 s.error_message = None;
                                 s.error_info = None;
@@ -4126,31 +4202,19 @@ async fn wait_for_local_port(
 
 async fn wait_for_tun_startup(
     api_port: Option<u16>,
+    tun_alias: &str,
     child: &Arc<Mutex<Child>>,
     stderr_ring: &Arc<Mutex<VecDeque<String>>>,
     timeout_secs: u64,
 ) -> Result<(), String> {
     let clamped = timeout_secs.clamp(3, 20);
-    let Some(port) = api_port else {
-        let steps = (clamped * 2).max(8) as usize;
-        for _ in 0..steps {
-            {
-                let mut guard = child.lock().unwrap_or_else(|p| p.into_inner());
-                if let Ok(Some(status)) = guard.try_wait() {
-                    let extra = read_last_stderr_line(stderr_ring)
-                        .map(|l| format!(" Детали: {l}"))
-                        .unwrap_or_default();
-                    return Err(format!(
-                        "Не удалось создать TUN-адаптер (код {}). Убедитесь, что приложение запущено от имени администратора и wintun.dll не заблокирован.{extra}",
-                        status.code().unwrap_or(-1)
-                    ));
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(80)).await;
-        }
-        return Ok(());
-    };
     let steps = (clamped * 10) as usize;
+    let mut tcp_ready_since: Option<Instant> = if api_port.is_none() {
+        Some(Instant::now())
+    } else {
+        None
+    };
+
     for _ in 0..steps {
         {
             let mut guard = child.lock().unwrap_or_else(|p| p.into_inner());
@@ -4164,16 +4228,28 @@ async fn wait_for_tun_startup(
                 ));
             }
         }
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            tokio::time::sleep(Duration::from_millis(350)).await;
-            return Ok(());
+        if tcp_ready_since.is_none() {
+            if let Some(port) = api_port {
+                if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+                    tcp_ready_since = Some(Instant::now());
+                }
+            }
+        }
+        if let Some(ready_at) = tcp_ready_since {
+            let luid_ready =
+                crate::kill_switch::resolve_interface_luid_by_alias(tun_alias).is_some();
+            let fallback_elapsed = ready_at.elapsed() >= Duration::from_millis(2000);
+            if luid_ready || fallback_elapsed {
+                tokio::time::sleep(Duration::from_millis(700)).await;
+                return Ok(());
+            }
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Err(format!("TUN-интерфейс Xray не ответил за {clamped} секунд"))
 }
 
-async fn probe_proxy_tunnel(
+async fn probe_proxy_tunnel_once(
     http_port: Option<u16>,
     total_timeout: Duration,
 ) -> Result<(u64, String), String> {
@@ -4194,31 +4270,46 @@ async fn probe_proxy_tunnel(
         .map_err(|e| format!("Ошибка создания тестового HTTP-клиента: {e}"))?;
 
     let probe_urls = [
+        ("www.gstatic.com", "https://www.gstatic.com/generate_204"),
         (
             "cp.cloudflare.com",
             "https://cp.cloudflare.com/generate_204",
         ),
-        ("www.gstatic.com", "https://www.gstatic.com/generate_204"),
-        (
-            "connectivitycheck.gstatic.com",
-            "https://connectivitycheck.gstatic.com/generate_204",
-        ),
+        ("1.1.1.1", "https://1.1.1.1/cdn-cgi/trace"),
     ];
 
     tokio::time::timeout(total_timeout, async move {
-        let mut last_err = String::new();
+        let mut set = tokio::task::JoinSet::new();
         for (label, url) in probe_urls {
-            let started = Instant::now();
-            match client.get(url).send().await {
-                Ok(resp) if resp.status().is_success() => {
-                    let rtt = started.elapsed().as_millis().max(1) as u64;
-                    return Ok((rtt, label.to_string()));
+            let c = client.clone();
+            set.spawn(async move {
+                let started = Instant::now();
+                match c.get(url).send().await {
+                    Ok(resp) if resp.status().is_success() => {
+                        let rtt = started.elapsed().as_millis().max(1) as u64;
+                        Ok((rtt, label.to_string()))
+                    }
+                    Ok(resp) => Err(format!(
+                        "{label}: HTTP {} (ожидался 204/2xx)",
+                        resp.status().as_u16()
+                    )),
+                    Err(e) => Err(format!("{label}: {}", redact_secrets(&e.to_string()))),
                 }
-                Ok(resp) => {
-                    last_err = format!("HTTP {} (ожидался 204/2xx)", resp.status().as_u16());
+            });
+        }
+
+        let mut last_err = String::new();
+        while let Some(joined) = set.join_next().await {
+            match joined {
+                Ok(Ok(ok_res)) => {
+                    set.abort_all();
+                    return Ok(ok_res);
+                }
+                Ok(Err(e)) => {
+                    last_err = e;
                 }
                 Err(e) => {
-                    last_err = redact_secrets(&e.to_string());
+                    last_err = format!("Ошибка задачи проверки: {e}");
                 }
             }
         }
@@ -4233,6 +4324,29 @@ async fn probe_proxy_tunnel(
             total_timeout.as_secs()
         )
     })?
+}
+
+async fn probe_proxy_tunnel(
+    http_port: Option<u16>,
+    total_timeout: Duration,
+) -> Result<(u64, String), String> {
+    let first = probe_proxy_tunnel_once(http_port, total_timeout).await;
+    if first.is_ok() || http_port.is_some() {
+        return first;
+    }
+    // In TUN mode Wintun route/DNS convergence may lag slightly; allow one quick retry
+    tokio::time::sleep(Duration::from_millis(700)).await;
+    match probe_proxy_tunnel_once(None, total_timeout).await {
+        Ok(res) => Ok(res),
+        Err(mut err) => {
+            if let Some(other) = crate::config_gen::detect_conflicting_vpn_adapter("aura_tun") {
+                err.push_str(&format!(
+                    " Обнаружен активный адаптер стороннего VPN «{other}» — отключите его и повторите попытку."
+                ));
+            }
+            Err(err)
+        }
+    }
 }
 
 async fn fetch_external_ip(http_port: Option<u16>) -> Result<String, String> {
