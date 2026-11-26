@@ -89,7 +89,7 @@ jobs:
           cargo fmt --check
           cargo clippy --all-targets -- -W clippy::all -D warnings
           cargo test --lib --locked --no-run
-          $exe = Get-ChildItem "target/debug/deps/aura_vpn_lib-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $exe = Get-ChildItem -Path "target/debug" -Filter "aura_vpn_lib-*.exe" -Recurse | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $kit = Get-ChildItem "C:/Program Files (x86)/Windows Kits/10/bin/*/x64/mt.exe" | Sort-Object FullName -Descending | Select-Object -First 1
           if ($exe -and $kit) {
             & $kit.FullName -manifest "tests.manifest" "-outputresource:$($exe.FullName);1"
