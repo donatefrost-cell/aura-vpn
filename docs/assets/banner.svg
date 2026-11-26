@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320" role="img" aria-label="AURA VPN — Privacy-First Windows Desktop Client">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F17" />
+      <stop offset="55%" stop-color="#111827" />
+      <stop offset="100%" stop-color="#0A0E15" />
+    </linearGradient>
+    <radialGradient id="auraGlowL" cx="18%" cy="45%" r="48%">
+      <stop offset="0%" stop-color="#6366F1" stop-opacity="0.34" />
+      <stop offset="55%" stop-color="#22D3EE" stop-opacity="0.10" />
+      <stop offset="100%" stop-color="#0B0F17" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="auraGlowR" cx="85%" cy="30%" r="42%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#0B0F17" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#818CF8" />
+      <stop offset="50%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#34D399" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="320" rx="24" fill="url(#bgGrad)" />
+  <rect width="1200" height="320" rx="24" fill="url(#auraGlowL)" />
+  <rect width="1200" height="320" rx="24" fill="url(#auraGlowR)" />
+  <rect x="1" y="1" width="1198" height="318" rx="23" fill="none" stroke="#FFFFFF" stroke-opacity="0.09" stroke-width="1.5" />
+
+  <!-- Subtle architectural grid lines -->
+  <g stroke="#94A3B8" stroke-opacity="0.06" stroke-width="1">
+    <line x1="0" y1="80" x2="1200" y2="80" />
+    <line x1="0" y1="240" x2="1200" y2="240" />
+    <line x1="320" y1="0" x2="320" y2="320" />
+    <line x1="920" y1="0" x2="920" y2="320" />
+  </g>
+
+  <!-- Emblem -->
+  <g transform="translate(155, 160)">
+    <circle r="76" fill="#111827" stroke="url(#ringGrad)" stroke-width="3.5" />
+    <circle r="62" fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="1.2" />
+    <!-- Geometric A peak + core shield dot -->
+    <path d="M 0 -40 L 34 32 L 19 32 L 0 -10 L -19 32 L -34 32 Z" fill="url(#ringGrad)" />
+    <circle cx="0" cy="21" r="7" fill="#34D399" />
+  </g>
+
+  <!-- Title & Metadata -->
+  <g font-family="Inter, Segoe UI, system-ui, -apple-system, sans-serif">
+    <text x="275" y="128" fill="#F8FAFC" font-size="52" font-weight="800" letter-spacing="1.5">AURA VPN</text>
+    <text x="277" y="170" fill="#CBD5E1" font-size="20" font-weight="500">
+      Privacy-First Windows Desktop Client · Tauri 2 + Rust + Xray-core + AmneziaWG
+    </text>
+
+    <!-- Feature / Security Pills -->
+    <g transform="translate(277, 198)" font-size="13.5" font-weight="600">
+      <rect x="0" y="0" width="150" height="32" rx="16" fill="#6366F1" fill-opacity="0.18" stroke="#818CF8" stroke-opacity="0.45" />
+      <text x="75" y="21" fill="#C7D2FE" text-anchor="middle">v1.0.0-rc.1 (x64)</text>
+
+      <rect x="164" y="0" width="132" height="32" rx="16" fill="#10B981" fill-opacity="0.16" stroke="#34D399" stroke-opacity="0.45" />
+      <text x="230" y="21" fill="#A7F3D0" text-anchor="middle">Apache-2.0</text>
+
+      <rect x="310" y="0" width="166" height="32" rx="16" fill="#0EA5E9" fill-opacity="0.16" stroke="#38BDF8" stroke-opacity="0.45" />
+      <text x="393" y="21" fill="#BAE6FD" text-anchor="middle">WFP Kill Switch</text>
+
+      <rect x="490" y="0" width="184" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.06" stroke="#94A3B8" stroke-opacity="0.30" />
+      <text x="582" y="21" fill="#E2E8F0" text-anchor="middle">DPAPI At-Rest Vault</text>
+
+      <rect x="688" y="0" width="144" height="32" rx="16" fill="#FFFFFF" fill-opacity="0.06" stroke="#94A3B8" stroke-opacity="0.30" />
+      <text x="760" y="21" fill="#E2E8F0" text-anchor="middle">0 Telemetry</text>
+    </g>
+  </g>
+</svg>

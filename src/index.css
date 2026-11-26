@@ -1,0 +1,272 @@
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/manrope';
+@import '@fontsource-variable/jetbrains-mono';
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-mono: 'JetBrains Mono Variable', 'Consolas', monospace;
+}
+
+:root,
+html.dark {
+  color-scheme: dark;
+  --md-primary: #a8b7ff;
+  --md-on-primary: #152256;
+  --md-primary-container: #2b3c7d;
+  --md-on-primary-container: #dde4ff;
+  --md-secondary: #bec4de;
+  --md-secondary-container: #2e3447;
+  --md-on-secondary-container: #dee4f8;
+  --md-tertiary: #d4b9f7;
+  --md-tertiary-container: #42335c;
+  --md-on-tertiary-container: #ede0ff;
+  --md-surface: #0f1218;
+  --md-surface-container-lowest: #0a0c11;
+  --md-surface-container-low: #151820;
+  --md-surface-container: #191d27;
+  --md-surface-container-high: #202532;
+  --md-surface-container-highest: #282e3d;
+  --md-on-surface: #e8ecf4;
+  --md-on-surface-variant: #a6b0c3;
+  --md-outline: #6f788c;
+  --md-outline-variant: rgba(232, 236, 244, 0.1);
+  --md-error: #f28b82;
+  --md-on-error: #490b0e;
+  --md-error-container: rgba(242, 139, 130, 0.14);
+  --md-on-error-container: #fad2cf;
+  --md-success: #4adea0;
+  --md-success-container: rgba(74, 222, 160, 0.14);
+  --md-on-success-container: #b8f5d8;
+  --md-warning: #f5ba4b;
+  --md-warning-container: rgba(245, 186, 75, 0.14);
+  --md-inverse-surface: #e6e9f2;
+  --md-inverse-on-surface: #191c24;
+  --md-inverse-primary: #3045b8;
+  --md-inverse-success: #0f7a4d;
+  --md-inverse-error: #b3261e;
+  --md-inverse-warning: #8c5200;
+  --md-motion-fast: 120ms;
+  --md-motion-medium: 180ms;
+  --md-motion-slow: 280ms;
+
+  --bg-canvas: var(--md-surface);
+  --bg-sidebar: var(--md-surface-container-low);
+  --bg-surface: var(--md-surface-container);
+  --bg-surface-2: var(--md-surface-container-high);
+  --bg-elevated: var(--md-surface-container-highest);
+  --border-subtle: var(--md-outline-variant);
+  --border-strong: rgba(232, 236, 244, 0.16);
+  --text-primary: var(--md-on-surface);
+  --text-secondary: var(--md-on-surface-variant);
+  --text-muted: #7b8499;
+  --accent-primary: var(--md-primary);
+  --accent-secondary: var(--md-tertiary);
+  --accent-soft: var(--md-primary-container);
+  --status-connected: var(--md-success);
+  --status-connected-soft: var(--md-success-container);
+  --status-warning: var(--md-warning);
+  --status-error: var(--md-error);
+  --status-error-soft: var(--md-error-container);
+  --dial-face: linear-gradient(155deg, #282e3d 0%, #191d27 100%);
+  --dial-shadow: 0 14px 36px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html.light {
+  color-scheme: light;
+  --md-primary: #3b59df;
+  --md-on-primary: #ffffff;
+  --md-primary-container: #dce2ff;
+  --md-on-primary-container: #152460;
+  --md-secondary: #535d78;
+  --md-secondary-container: #dde2f2;
+  --md-on-secondary-container: #1b2234;
+  --md-tertiary: #6a4fa3;
+  --md-tertiary-container: #ecddff;
+  --md-on-tertiary-container: #29164d;
+  --md-surface: #f7f8fc;
+  --md-surface-container-lowest: #ffffff;
+  --md-surface-container-low: #f0f2f8;
+  --md-surface-container: #e9ecf5;
+  --md-surface-container-high: #e1e5f0;
+  --md-surface-container-highest: #d7dce9;
+  --md-on-surface: #171b26;
+  --md-on-surface-variant: #4a5368;
+  --md-outline: #737c91;
+  --md-outline-variant: rgba(23, 27, 38, 0.11);
+  --md-error: #ba1a2d;
+  --md-on-error: #ffffff;
+  --md-error-container: #ffdad9;
+  --md-on-error-container: #69000e;
+  --md-success: #148858;
+  --md-success-container: #d3f7e5;
+  --md-on-success-container: #063b24;
+  --md-warning: #b4690e;
+  --md-warning-container: #fcead0;
+  --md-inverse-surface: #262b36;
+  --md-inverse-on-surface: #f2f4f8;
+  --md-inverse-primary: #a8b7ff;
+  --md-inverse-success: #6ee7b7;
+  --md-inverse-error: #fca5a5;
+  --md-inverse-warning: #fcd34d;
+
+  --bg-canvas: var(--md-surface);
+  --bg-sidebar: var(--md-surface-container-low);
+  --bg-surface: var(--md-surface-container-lowest);
+  --bg-surface-2: var(--md-surface-container);
+  --bg-elevated: var(--md-surface-container-high);
+  --border-subtle: var(--md-outline-variant);
+  --border-strong: rgba(23, 27, 38, 0.16);
+  --text-primary: var(--md-on-surface);
+  --text-secondary: var(--md-on-surface-variant);
+  --text-muted: #677085;
+  --accent-primary: var(--md-primary);
+  --accent-secondary: var(--md-tertiary);
+  --accent-soft: var(--md-primary-container);
+  --status-connected: var(--md-success);
+  --status-connected-soft: var(--md-success-container);
+  --status-warning: var(--md-warning);
+  --status-error: var(--md-error);
+  --status-error-soft: var(--md-error-container);
+  --dial-face: linear-gradient(155deg, #ffffff 0%, #f0f2f8 100%);
+  --dial-shadow: 0 14px 32px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--md-surface);
+  color: var(--md-on-surface);
+  font-family: 'Inter Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+
+/* AURA Atmospheric Minimalism: background compositions */
+html[data-bg-style='aura'] body {
+  background-image:
+    radial-gradient(640px 380px at 16% -6%, color-mix(in srgb, var(--md-primary) 13%, transparent), transparent 72%),
+    radial-gradient(560px 360px at 88% 106%, color-mix(in srgb, var(--md-tertiary) 10%, transparent), transparent 70%);
+}
+
+html.light[data-bg-style='aura'] body {
+  background-image:
+    radial-gradient(640px 380px at 14% -8%, color-mix(in srgb, var(--md-primary) 10%, transparent), transparent 74%),
+    radial-gradient(520px 340px at 90% 104%, color-mix(in srgb, var(--md-tertiary) 8%, transparent), transparent 72%);
+}
+
+html[data-bg-style='minimal'] body {
+  background-image: none;
+}
+
+html[data-bg-style='standard'] body {
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--md-surface-container-low) 45%, var(--md-surface)) 0%,
+    var(--md-surface) 100%
+  );
+}
+
+html[data-bg-style='mica'] body,
+html[data-bg-style='mica'] #root {
+  background-color: color-mix(in srgb, var(--md-surface) 84%, transparent);
+  background-image: none;
+}
+
+.font-display {
+  font-family: 'Manrope Variable', 'Inter Variable', 'Segoe UI', sans-serif;
+}
+
+.font-mono-num {
+  font-family: 'JetBrains Mono Variable', 'Consolas', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+input,
+textarea,
+code,
+pre,
+.selectable {
+  user-select: text;
+}
+
+.aura-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--md-outline-variant) transparent;
+}
+
+.aura-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.aura-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.aura-scroll::-webkit-scrollbar-thumb {
+  background: var(--md-outline-variant);
+  border-radius: 999px;
+}
+
+.aura-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--md-outline);
+}
+
+@keyframes aura-setting-highlight {
+  0% {
+    box-shadow: 0 0 0 0 transparent;
+    background-color: var(--md-primary-container);
+  }
+  35% {
+    box-shadow: 0 0 0 2px var(--md-primary);
+    background-color: color-mix(in srgb, var(--md-primary-container) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    background-color: transparent;
+  }
+}
+
+.aura-setting-highlight {
+  border-radius: 0.75rem;
+  animation: aura-setting-highlight 1.8s ease-out;
+}
+
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--md-primary);
+    outline-offset: 2px;
+  }
+}
+
+html[data-no-motion='true'] *,
+html[data-no-motion='true'] *::before,
+html[data-no-motion='true'] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

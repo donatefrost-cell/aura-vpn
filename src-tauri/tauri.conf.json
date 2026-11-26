@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AURA VPN",
+  "version": "1.0.0-rc.1",
+  "identifier": "app.auravpn.desktop",
+  "build": {
+    "beforeDevCommand": "npm.cmd run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm.cmd run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AURA VPN",
+        "width": 960,
+        "height": 640,
+        "minWidth": 840,
+        "minHeight": 580,
+        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "freezePrototype": true,
+      "csp": "default-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src 'none'; worker-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "AURA VPN",
+    "copyright": "Copyright (c) 2026 AURA VPN",
+    "shortDescription": "AURA VPN Desktop Client",
+    "longDescription": "Desktop VPN client for Windows powered by Tauri, Xray-core and AmneziaWG",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "resources/legal/LICENSE.txt",
+      "resources/legal/THIRD_PARTY_NOTICES.md",
+      "resources/core/xray.exe",
+      "resources/core/XRAY-LICENSE.txt",
+      "resources/core/wintun.dll",
+      "resources/core/WINTUN-LICENSE.txt",
+      "resources/core/wireproxy-awg.exe",
+      "resources/core/WIREPROXY-AWG-LICENSE.txt",
+      "icons/tray-disconnected.png",
+      "icons/tray-connecting.png",
+      "icons/tray-connected.png",
+      "icons/tray-reconnecting.png",
+      "icons/tray-error.png",
+      "icons/tray-killswitch.png"
+    ],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false,
+        "languages": ["Russian", "English"]
+      }
+    }
+  }
+}
